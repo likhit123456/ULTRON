@@ -27,3 +27,6 @@ dist/
 
 # Screenshots (evidence, not source)
 dashboard/web/screenshots/
+
+# Auth database (contains credentials, sessions — never commit)
+auth.db

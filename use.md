@@ -53,12 +53,24 @@ sudo systemctl stop sentinel-dashboard                                          
 | GET | `/debug.html` | `ULTRON_DEBUG=1`, **or** client in `ULTRON_MGMT_SUBNET` + HTTP Basic auth; else **404** | standalone debug page (hashed CSP) | `no-store` | operator |
 | GET | `/healthz` | open | `{ok, mqtt_connected, db_readable, uptime_s, version, ws_clients}` | `no-store` | systemd, debug page |
 | GET | `/favicon.ico` | open | `dist/favicon.ico` or `204` | — | browser |
-| WS  | `/ws` | open (LAN) | data stream + ACK in + clock-sync | — | operator, booth, debug |
+| WS  | `/ws` | **session cookie + Origin** | data stream + ACK in + clock-sync | — | operator, booth, debug |
+| POST | `/auth/setup` | enrollment token | begin first-credential registration | — | CLI / setup |
+| POST | `/auth/setup/complete` | ceremony cookie | finish first registration + session | — | CLI / setup |
+| POST | `/auth/login/begin` | open | begin authentication ceremony | — | browser |
+| POST | `/auth/login/complete` | ceremony cookie | finish login + session | — | browser |
+| POST | `/auth/reauth/begin` | open | begin re-authentication | — | browser |
+| POST | `/auth/reauth/complete` | ceremony cookie | finish re-auth + session refresh | — | browser |
+| POST | `/auth/register/begin` | session | begin add-credential ceremony | — | browser |
+| POST | `/auth/register/complete` | session + ceremony | finish add credential | — | browser |
+| POST | `/auth/logout` | session | revoke session, close WS | — | browser |
+| GET | `/auth/status` | open | `{has_owner, authenticated}` | — | browser |
+| GET | `/auth/credentials` | session | list credentials | — | browser |
+| DELETE | `/auth/credentials/{id}` | session | revoke a credential | — | browser |
 | GET | `/{path}` | open | SPA fallback → `index.html` | `no-store` | deep links |
 
 Example `/healthz`:
 ```json
-{"ok":true,"mqtt_connected":true,"db_readable":false,"uptime_s":1.2,"version":"0.3.0-phase1","ws_clients":1}
+{"ok":true,"mqtt_connected":true,"db_readable":false,"uptime_s":1.2,"version":"0.4.0-phase1","ws_clients":1}
 ```
 Routes beyond §3's allowed set are justified: `/favicon.ico` (browser default request → 204) and the SPA fallback (`?view=booth` is a query on `/`, but the fallback keeps deep links working).
 
@@ -212,10 +224,28 @@ Modes: **client** = runs in browser, no server; **server (deferred)** = needs au
 | `ULTRON_MGMT_SUBNET` | `192.168.50.0/24` | subnet allowed to reach `/debug.html` with auth |
 | `ULTRON_DEBUG_USER` / `ULTRON_DEBUG_PASS` | `admin` / `` | Basic auth for `/debug.html` |
 | `ULTRON_LOG` | `INFO` | log level |
+| `ULTRON_AUTH_DB` | `dashboard/auth.db` | auth SQLite (sessions, credentials, audit) |
+| `ULTRON_RP_ID` | `localhost` | WebAuthn relying party ID (must be hostname, not IP) |
+| `ULTRON_RP_NAME` | `ULTRON` | WebAuthn relying party display name |
+| `ULTRON_ORIGINS` | `http://localhost:8080` | comma-separated allowed origins (non-localhost `http://` rejected) |
+| `ULTRON_SESSION_TTL` | `3600` | session lifetime in seconds |
+
+**Config guards** — server refuses to start if:
+1. `ULTRON_ORIGINS` contains a non-localhost `http://` origin
+2. `ULTRON_DEBUG=1` with a non-localhost `ULTRON_RP_ID`
+3. `ULTRON_RP_ID` is an IP address (must be a hostname)
 
 ---
 
-## 8. Known gaps
+## 8. Fixed issues
+
+| Issue | Status | Detail |
+|-------|--------|--------|
+| **Unauthenticated WS ACK** | **closed (CP4)** | WS upgrade now requires a valid session cookie and matching `Origin` header. ACK is accepted only on an authenticated socket. Prior to CP4, any LAN client could send `{"ack":"<id>"}` over WS and acknowledge alerts without authentication. |
+
+---
+
+## 9. Known gaps
 
 - **Left out (bus carries no data):** WiFi "last beacon anomaly" detail and Suricata "rule count" are approximated from the alert stream (`src`), since no dedicated topic/field exists. IDS "rule count" shows alert count, not loaded-rule count.
 - **CSS modules:** the brief suggested per-component CSS modules; the app uses one `styles/global.css` + `tokens.css` (smaller bundle) — a deliberate deviation.

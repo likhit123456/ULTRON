@@ -10,7 +10,7 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-VERSION = "0.3.0-phase1"
+VERSION = "0.4.0-phase1"
 
 # server/ -> dashboard/ ; built app lives at dashboard/dist (deploy) or web/dist (dev).
 _SERVER_DIR = Path(__file__).resolve().parent
@@ -58,6 +58,18 @@ class Config:
     debug_user: str = os.environ.get("ULTRON_DEBUG_USER", "admin")
     debug_pass: str = os.environ.get("ULTRON_DEBUG_PASS", "")
 
+    # Auth (CP4)
+    auth_db: Path = Path(os.environ.get("ULTRON_AUTH_DB",
+                                         str(_DASHBOARD_DIR / "auth.db")))
+    rp_id: str = os.environ.get("ULTRON_RP_ID", "localhost")
+    rp_name: str = os.environ.get("ULTRON_RP_NAME", "ULTRON")
+    origins: list[str] = field(default_factory=lambda: [
+        o.strip() for o in os.environ.get(
+            "ULTRON_ORIGINS", "http://localhost:8080"
+        ).split(",") if o.strip()
+    ])
+    session_ttl: int = int(os.environ.get("ULTRON_SESSION_TTL", "3600"))
+
     version: str = VERSION
 
     @property
@@ -65,5 +77,40 @@ class Config:
         return self.dist_dir / "index.html"
 
 
+class ConfigError(SystemExit):
+    def __init__(self, msg: str) -> None:
+        super().__init__(f"CONFIG ERROR: {msg}")
+
+
+def _validate(cfg: "Config") -> None:
+    import ipaddress as _ip
+    import urllib.parse as _url
+
+    for origin in cfg.origins:
+        parsed = _url.urlparse(origin)
+        if parsed.scheme == "http" and parsed.hostname not in (
+            "localhost", "127.0.0.1", "::1",
+        ):
+            raise ConfigError(
+                f"ULTRON_ORIGINS contains non-localhost http:// origin: {origin}"
+            )
+
+    if cfg.debug_enabled:
+        if cfg.rp_id not in ("localhost", "127.0.0.1", "::1"):
+            raise ConfigError(
+                f"ULTRON_DEBUG=1 with non-localhost RP ID '{cfg.rp_id}' is unsafe"
+            )
+
+    try:
+        _ip.ip_address(cfg.rp_id)
+        raise ConfigError(
+            f"ULTRON_RP_ID must be a hostname, not an IP address: {cfg.rp_id}"
+        )
+    except ValueError:
+        pass  # not an IP — that's correct
+
+
 def load() -> "Config":
-    return Config()
+    cfg = Config()
+    _validate(cfg)
+    return cfg

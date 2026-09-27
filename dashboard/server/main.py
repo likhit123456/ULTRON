@@ -1,16 +1,18 @@
 """ULTRON dashboard web server (Pi4 — GOVERNANCE, :8080).
 
-Routes (the only ones): /  /assets/*  /debug.html  /ws  /healthz
+Routes: /  /assets/*  /debug.html  /ws  /healthz  /auth/*
 (+ /favicon.ico and a SPA fallback — justified in use.md).
 
 Serves the built React app, bridges MQTT<->/ws, replays history + acked alerts
 on join, handles ACK and clock-sync control frames. Never writes ultron/risk/#.
+WebSocket upgrade requires valid session + Origin header.
 """
 
 from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import ipaddress
 import json
 import logging
@@ -21,8 +23,11 @@ from pathlib import Path
 from aiohttp import WSMsgType, web
 
 from . import clock, csp, db
+from .auth import add_auth_routes
+from .auth_db import AuthDB
 from .bridge import Bridge, Hub, envelope
 from .config import Config, load
+from .ws_session import SessionWsManager
 
 LOG = logging.getLogger("ultron.main")
 _START = time.monotonic()
@@ -134,16 +139,45 @@ async def handle_healthz(request: web.Request) -> web.Response:
 # --------------------------------------------------------------------------- #
 # WebSocket
 # --------------------------------------------------------------------------- #
+def _validate_ws_origin(request: web.Request, origins: list[str]) -> bool:
+    origin = request.headers.get("Origin", "")
+    return origin in origins
+
+
+def _ws_session(request: web.Request) -> str | None:
+    """Validate session cookie on WS upgrade. Returns sid_hash or None."""
+    from .auth import SESSION_COOKIE
+    sid = request.cookies.get(SESSION_COOKIE)
+    if not sid:
+        return None
+    auth_db: AuthDB = request.app["auth_db"]
+    session = auth_db.validate_session(sid)
+    if not session:
+        return None
+    return hashlib.sha256(sid.encode()).hexdigest()
+
+
 async def handle_ws(request: web.Request) -> web.WebSocketResponse:
     app = request.app
     cfg: Config = app["cfg"]
     hub: Hub = app["hub"]
     bridge: Bridge = app["bridge"]
+    session_mgr: SessionWsManager = app["session_mgr"]
+
+    # Validate Origin header
+    if not _validate_ws_origin(request, cfg.origins):
+        raise web.HTTPForbidden(text="Origin not allowed")
+
+    # Validate session
+    sid_hash = _ws_session(request)
+    if not sid_hash:
+        raise web.HTTPUnauthorized(text="Valid session required for WS")
 
     ws = web.WebSocketResponse(heartbeat=20)
     await ws.prepare(request)
     hub.add(ws)
-    LOG.info("WS join (%d clients)", hub.count)
+    session_mgr.track(sid_hash, ws)
+    LOG.info("WS join (%d clients, session=%s…)", hub.count, sid_hash[:12])
 
     def send(obj: dict) -> "asyncio.Future":
         return ws.send_str(json.dumps(obj, separators=(",", ":")))
@@ -173,7 +207,7 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
                 if pong is not None:
                     await send(pong)
                 continue
-            # operator ACK
+            # operator ACK — authenticated sockets only (validated at upgrade)
             aid = ctrl.get("ack")
             if aid:
                 ok = await bridge.publish_ack(str(aid))
@@ -181,6 +215,7 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
                     "msg": f"ACK {'sent' if ok else 'queued'}: {aid}",
                     "sev": "green" if ok else "yellow"}))
     finally:
+        session_mgr.untrack(sid_hash, ws)
         hub.remove(ws)
         LOG.info("WS leave (%d clients)", hub.count)
     return ws
@@ -202,6 +237,9 @@ async def _on_cleanup(app: web.Application) -> None:
             await task
         except asyncio.CancelledError:
             pass
+    auth_db = app.get("auth_db")
+    if auth_db:
+        auth_db.close()
 
 
 def create_app(cfg: Config | None = None) -> web.Application:
@@ -210,6 +248,16 @@ def create_app(cfg: Config | None = None) -> web.Application:
     app["cfg"] = cfg
     app["hub"] = Hub()
     app["bridge"] = Bridge(cfg, app["hub"])
+
+    auth_db = AuthDB(cfg.auth_db)
+    app["auth_db"] = auth_db
+    app["auth_rp_id"] = cfg.rp_id
+    app["auth_rp_name"] = cfg.rp_name
+    app["auth_origins"] = cfg.origins
+    session_mgr = SessionWsManager()
+    app["session_mgr"] = session_mgr
+
+    add_auth_routes(app)
 
     if cfg.debug_html.exists():
         html = cfg.debug_html.read_text(encoding="utf-8")
