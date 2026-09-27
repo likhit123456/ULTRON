@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect } from "react";
 import { useStore } from "./store/store";
+import { AuthGate } from "./components/AuthGate";
 import OperatorView from "./views/OperatorView";
 
 const BoothView = lazy(() => import("./views/BoothView"));
@@ -9,10 +10,7 @@ function useView(): "operator" | "booth" {
   return params.get("view") === "booth" ? "booth" : "operator";
 }
 
-export default function App() {
-  const band = useStore((s) => s.band);
-  useEffect(() => { document.documentElement.setAttribute("data-band", band); }, [band]);
-
+function Dashboard() {
   const view = useView();
   if (view === "booth") {
     return (
@@ -22,4 +20,15 @@ export default function App() {
     );
   }
   return <OperatorView />;
+}
+
+export default function App() {
+  const band = useStore((s) => s.band);
+  useEffect(() => { document.documentElement.setAttribute("data-band", band); }, [band]);
+
+  return (
+    <AuthGate>
+      <Dashboard />
+    </AuthGate>
+  );
 }

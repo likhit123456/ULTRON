@@ -2,6 +2,8 @@ import { rc } from "../dev/rc";
 import { memo, useEffect, useRef, useState } from "react";
 import { useStore } from "../store/store";
 import { utcClock } from "../lib/format";
+import { logout } from "../lib/auth";
+import { transport } from "../transport/transport";
 
 const LABEL: Record<string, string> = { live: "LIVE", stale: "STALE", offline: "OFFLINE" };
 
@@ -49,7 +51,7 @@ function HeaderImpl() {
       <div className="pill">{band}</div>
       <div className="clock">{clock} UTC</div>
       <div className="tag">MODE: ULTRON</div>
-      <div className="session-chip">🔒</div>
+      <button className="session-chip" title="Sign out" onClick={() => { transport.stop(); logout(); }}>SIGN OUT</button>
     </header>
   );
 }

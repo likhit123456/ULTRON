@@ -45,7 +45,11 @@ export interface CommandEntry {
   ok: boolean;
 }
 
+export type AuthPhase = "checking" | "setup" | "login" | "ready";
+
 export interface State {
+  authPhase: AuthPhase;
+  authHasOwner: boolean;
   conn: Conn;
   degraded: boolean;
   score: number;
@@ -81,6 +85,7 @@ const MAX_CMD_HISTORY = 100;
 
 function initial(): State {
   return {
+    authPhase: "checking", authHasOwner: false,
     conn: "offline", degraded: false, score: 0, scoreTs: 0, band: "GREEN", bandBump: 0,
     history: [], alerts: [], openCount: 0, ackTotal: 0, ackDone: 0, eventCount: 0,
     nodes: {}, layers: { idsCount: 0, idsLast: 0, lanToday: 0, wifiRogue: false, wifiLast: 0, tripLast: 0, tripSeq: 0 },
@@ -109,6 +114,13 @@ export class Store {
 
   private emit(): void {
     for (const l of this.listeners) l();
+  }
+
+  setAuth(authenticated: boolean, hasOwner: boolean): void {
+    const phase: AuthPhase = authenticated ? "ready" : hasOwner ? "login" : "setup";
+    if (this.state.authPhase === phase && this.state.authHasOwner === hasOwner) return;
+    this.state = { ...this.state, authPhase: phase, authHasOwner: hasOwner };
+    this.emit();
   }
 
   setConn(conn: Conn): void {

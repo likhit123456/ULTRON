@@ -390,4 +390,54 @@ footer { max-width: 1400px; margin: 4px auto 26px; width: 100%; padding: 12px va
   display: flex; gap: 18px; flex-wrap: wrap; }
 footer .v { color: var(--text); font-family: var(--mono); }
 
+/* ---- auth screens ---- */
+.auth-screen {
+  display: flex; align-items: center; justify-content: center;
+  height: 100vh; background: var(--bg);
+}
+.auth-card {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 40px 36px; width: 360px;
+  text-align: center;
+}
+.auth-logo {
+  font-size: 28px; letter-spacing: 0.12em; color: var(--muted);
+  margin-bottom: 8px; font-weight: 300;
+}
+.auth-logo b { color: var(--accent); font-weight: 700; }
+.auth-title {
+  font-size: 16px; color: var(--text); margin-bottom: 16px;
+  letter-spacing: 0.06em; text-transform: uppercase; font-weight: 600;
+}
+.auth-hint {
+  font-size: 13px; color: var(--muted); margin: 0 0 20px; line-height: 1.5;
+}
+.auth-input {
+  width: 100%; padding: 10px 12px; font-family: var(--mono); font-size: 13px;
+  background: var(--bg); border: 1px solid var(--border-2); border-radius: 4px;
+  color: var(--text); margin-bottom: 14px; outline: none;
+}
+.auth-input:focus { border-color: var(--accent); }
+.auth-btn {
+  width: 100%; padding: 10px; font-size: 13px; font-weight: 600;
+  letter-spacing: 0.06em; text-transform: uppercase; cursor: pointer;
+  background: var(--accent-weak); color: var(--accent);
+  border: 1px solid var(--accent-line); border-radius: 4px;
+  transition: background var(--dur) var(--ease);
+}
+.auth-btn:hover:not(:disabled) { background: rgba(255,255,255,.08); }
+.auth-btn:disabled { opacity: 0.4; cursor: default; }
+.auth-status {
+  margin-top: 14px; font-size: 12px; color: var(--muted); font-family: var(--mono);
+}
+
+/* sign-out chip in header */
+button.session-chip {
+  font-size: 10px; letter-spacing: 0.08em; padding: 2px 8px;
+  background: transparent; border: 1px solid var(--border-2); border-radius: 3px;
+  color: var(--muted); cursor: pointer; font-family: var(--mono);
+  text-transform: uppercase;
+}
+button.session-chip:hover { color: var(--text); border-color: var(--accent); }
+
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }

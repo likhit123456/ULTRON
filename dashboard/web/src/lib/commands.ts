@@ -1,5 +1,7 @@
 import { store } from "../store/store";
 import type { CommandEntry } from "../store/store";
+import { transport } from "../transport/transport";
+import { logout } from "./auth";
 
 export interface CommandDef {
   name: string;
@@ -32,18 +34,60 @@ export const COMMANDS: CommandDef[] = [
 ];
 
 export const QUICK_CMDS = [
-  { label: "ACK ALL", cmd: "/ack all", icon: "✓", disabled: true },
+  { label: "ACK ALL", cmd: "/ack all", icon: "✓" },
   { label: "UNACKED", cmd: "/filter type:unacked", icon: "⚠" },
   { label: "FOCUS NODE", cmd: "/focus", icon: "◎" },
   { label: "BOOTH VIEW", cmd: "/view booth", icon: "▣" },
   { label: "EXPORT CSV", cmd: "/export alerts", icon: "↓" },
-  { label: "LOCK", cmd: "/lock", icon: "🔒", disabled: true },
+  { label: "LOCK", cmd: "/lock", icon: "🔒" },
 ];
 
 let _cmdId = 0;
 
 function entry(command: string, result: string, ok: boolean): CommandEntry {
   return { id: `cmd-${++_cmdId}`, ts: Date.now(), command, result, ok };
+}
+
+function handleServerCommand(name: string, args: string, raw: string): void {
+  switch (name) {
+    case "ack": {
+      if (args === "all") {
+        const s = store.getState();
+        const unacked = s.alerts.filter((a) => !a.ack);
+        if (!unacked.length) {
+          store.addCommand(entry(raw, "No unacknowledged alerts", true));
+          return;
+        }
+        for (const a of unacked) transport.sendAck(a.id);
+        store.addCommand(entry(raw, `ACK sent for ${unacked.length} alerts`, true));
+      } else if (args) {
+        transport.sendAck(args);
+        store.addCommand(entry(raw, `ACK sent: ${args}`, true));
+      } else {
+        store.addCommand(entry(raw, "Usage: /ack <id|all>", false));
+      }
+      break;
+    }
+    case "lock": {
+      transport.stop();
+      logout();
+      store.addCommand(entry(raw, "Session ended", true));
+      break;
+    }
+    case "devices": {
+      fetch("/auth/credentials")
+        .then((r) => r.json())
+        .then((creds: Array<{ id: string; revoked: boolean; sign_count: number }>) => {
+          const lines = creds.map((c) =>
+            `${c.id.slice(0, 20)}… count=${c.sign_count} ${c.revoked ? "REVOKED" : "active"}`);
+          store.addCommand(entry(raw, lines.join("\n") || "No credentials", true));
+        })
+        .catch((e) => store.addCommand(entry(raw, `Error: ${e.message}`, false)));
+      break;
+    }
+    default:
+      store.addCommand(entry(raw, `Server command not implemented: /${name}`, false));
+  }
 }
 
 export function execCommand(raw: string): void {
@@ -66,7 +110,11 @@ export function execCommand(raw: string): void {
     return;
   }
   if (def.serverSide) {
-    store.addCommand(entry(trimmed, "Requires authentication — not available yet", false));
+    if (store.getState().authPhase !== "ready") {
+      store.addCommand(entry(trimmed, "Requires authentication — sign in first", false));
+      return;
+    }
+    handleServerCommand(name, args, trimmed);
     return;
   }
 

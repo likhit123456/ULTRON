@@ -14,9 +14,7 @@ function QuickControlsImpl() {
     <div className="qc">
       <div className="qc-buttons">
         {QUICK_CMDS.map((q) => (
-          <button key={q.cmd} className={"qc-btn" + (q.disabled ? " disabled" : "")}
-            disabled={q.disabled}
-            title={q.disabled ? "requires owner session — Part B" : undefined}
+          <button key={q.cmd} className="qc-btn"
             onClick={() => execCommand(q.cmd)}>
             <span className="qc-icon">{q.icon}</span>
             <span className="qc-label">{q.label}</span>
