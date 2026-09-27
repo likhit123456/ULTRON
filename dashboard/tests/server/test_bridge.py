@@ -24,11 +24,11 @@ def test_score_and_band_mapping():
     assert map_message("ultron/risk/score", _p({"v": "nope"})) is None
 
 
-def test_suricata_and_wifi_become_alerts_tagged_by_src():
+def test_suricata_and_wifi_become_events_tagged_by_kind():
     m = map_message("ultron/suricata/0", _p({"signature": "ET SCAN", "severity": "red"}))
-    assert m["t"] == "alert" and "suricata" in m["d"]["src"] and m["d"]["ack"] is False
+    assert m["t"] == "event" and m["d"]["kind"] == "suricata" and m["d"]["summary"] == "ET SCAN"
     w = map_message("ultron/wifi/0", _p({"title": "Rogue AP"}))
-    assert w["t"] == "alert" and w["d"]["src"] == "wifi"
+    assert w["t"] == "event" and w["d"]["kind"] == "wifi" and w["d"]["summary"] == "Rogue AP"
 
 
 def test_health_lan_tripwire_shapes():

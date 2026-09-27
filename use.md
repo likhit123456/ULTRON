@@ -156,7 +156,7 @@ The dashboard **never** writes `ultron/risk/#` (that is Pi4's `sentinel-risk`), 
 
 **The dashboard never writes:** `ultron/risk/#`, any other MQTT topic, or the evidence DB (opened `mode=ro`).
 
-### 5.1 Operator commands (`lib/commands.ts` — 17 total)
+### 5.1 Operator commands (`lib/commands.ts` — 19 total)
 
 | # | Command | Args | Mode | Description |
 |---|---------|------|------|-------------|
@@ -171,18 +171,18 @@ The dashboard **never** writes `ultron/risk/#` (that is Pi4's `sentinel-risk`), 
 | 9 | `/health` | — | client | Print per-node heartbeat ages |
 | 10 | `/mute` | `<minutes>` | client | Mute toasts |
 | 11 | `/export` | `alerts` | client | Browser-side CSV of alerts |
-| 12 | `/ack` | `<id\|all>` | server (deferred) | Acknowledge alert(s) — requires owner session |
-| 13 | `/lock` | — | server (deferred) | End the session — requires owner session |
-| 14 | `/devices` | — | server (deferred) | List registered passkeys — requires owner session |
+| 12 | `/ack` | `<id\|all>` | server | Acknowledge alert(s) — requires authenticated session |
+| 13 | `/lock` | — | server | End the session (logout) |
+| 14 | `/devices` | — | server | List registered passkeys — requires authenticated session |
 | 15 | `/block` | — | Phase 2 (disabled) | Block a device |
 | 16 | `/isolate` | — | Phase 2 (disabled) | Isolate a segment |
 | 17 | `/quarantine` | — | Phase 2 (disabled) | Quarantine a host |
 | 18 | `/restart` | — | Phase 2 (disabled) | Restart a service |
 | 19 | `/scan` | — | Phase 2 (disabled) | Scan network |
 
-Modes: **client** = runs in browser, no server; **server (deferred)** = needs authenticated WS, returns "requires authentication" until Part B; **Phase 2 (disabled)** = response action, rejected with "Phase 2" message, chip disabled in UI. The `COMMANDS` array has exactly **19** entries (`lib/commands.ts`).
+Modes: **client** = runs in browser, no server; **server** = requires authenticated WS session (rejects with "sign in first" if unauthenticated); **Phase 2 (disabled)** = response action, rejected with "Phase 2" message, chip disabled in UI. The `COMMANDS` array has exactly **19** entries (`lib/commands.ts`).
 
-**Quick Controls** (6 buttons): ACK ALL (disabled — requires session), UNACKED, FOCUS NODE, BOOTH VIEW, EXPORT CSV, LOCK (disabled — requires session).
+**Quick Controls** (6 buttons): ACK ALL, UNACKED, FOCUS NODE, BOOTH VIEW, EXPORT CSV, LOCK.
 
 ---
 
