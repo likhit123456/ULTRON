@@ -1,0 +1,172 @@
+import { store } from "../store/store";
+import type { CommandEntry } from "../store/store";
+
+export interface CommandDef {
+  name: string;
+  args?: string;
+  desc: string;
+  phase2?: boolean;
+  serverSide?: boolean;
+}
+
+export const COMMANDS: CommandDef[] = [
+  { name: "help", desc: "List commands with args" },
+  { name: "filter", args: "<sev:x src:x type:x>", desc: "Filter the events panel" },
+  { name: "clear-filter", desc: "Reset event filters" },
+  { name: "focus", args: "<pi4|pi3a|pi3b|c3|wroom>", desc: "Highlight a node in the device map" },
+  { name: "device", args: "<ip|mac>", desc: "Open a device card in the IoT graph" },
+  { name: "history", args: "<1h|6h|24h>", desc: "Change the chart range" },
+  { name: "view", args: "<operator|booth>", desc: "Switch view" },
+  { name: "latency", desc: "Print latency stats" },
+  { name: "health", desc: "Print per-node heartbeat ages" },
+  { name: "mute", args: "<minutes>", desc: "Mute toasts" },
+  { name: "export", args: "alerts", desc: "Browser-side CSV of alerts" },
+  { name: "ack", args: "<id|all>", desc: "Acknowledge alert(s)", serverSide: true },
+  { name: "lock", desc: "End the session", serverSide: true },
+  { name: "devices", desc: "List registered passkeys", serverSide: true },
+  { name: "block", desc: "Block a device", phase2: true },
+  { name: "isolate", desc: "Isolate a segment", phase2: true },
+  { name: "quarantine", desc: "Quarantine a host", phase2: true },
+  { name: "restart", desc: "Restart a service", phase2: true },
+  { name: "scan", desc: "Scan network", phase2: true },
+];
+
+export const QUICK_CMDS = [
+  { label: "ACK ALL", cmd: "/ack all", icon: "✓", disabled: true },
+  { label: "UNACKED", cmd: "/filter type:unacked", icon: "⚠" },
+  { label: "FOCUS NODE", cmd: "/focus", icon: "◎" },
+  { label: "BOOTH VIEW", cmd: "/view booth", icon: "▣" },
+  { label: "EXPORT CSV", cmd: "/export alerts", icon: "↓" },
+  { label: "LOCK", cmd: "/lock", icon: "🔒", disabled: true },
+];
+
+let _cmdId = 0;
+
+function entry(command: string, result: string, ok: boolean): CommandEntry {
+  return { id: `cmd-${++_cmdId}`, ts: Date.now(), command, result, ok };
+}
+
+export function execCommand(raw: string): void {
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith("/")) {
+    store.addCommand(entry(trimmed, "Commands must start with /", false));
+    return;
+  }
+  const parts = trimmed.slice(1).split(/\s+/);
+  const name = parts[0]?.toLowerCase() ?? "";
+  const args = parts.slice(1).join(" ");
+  const def = COMMANDS.find((c) => c.name === name);
+
+  if (!def) {
+    store.addCommand(entry(trimmed, `Unknown command: /${name}`, false));
+    return;
+  }
+  if (def.phase2) {
+    store.addCommand(entry(trimmed, "Response actions are Phase 2 — notify-only in Phase 1", false));
+    return;
+  }
+  if (def.serverSide) {
+    store.addCommand(entry(trimmed, "Requires authentication — not available yet", false));
+    return;
+  }
+
+  switch (name) {
+    case "help": {
+      const lines = COMMANDS.map((c) => {
+        const a = c.args ? ` ${c.args}` : "";
+        const tag = c.phase2 ? " [Phase 2]" : c.serverSide ? " [auth]" : "";
+        return `/${c.name}${a} — ${c.desc}${tag}`;
+      });
+      store.addCommand(entry(trimmed, lines.join("\n"), true));
+      break;
+    }
+    case "filter": {
+      const filter = args || "all";
+      store.setEventFilter(filter);
+      store.addCommand(entry(trimmed, `Filter set: ${filter}`, true));
+      break;
+    }
+    case "clear-filter": {
+      store.setEventFilter("all");
+      store.addCommand(entry(trimmed, "Filters cleared", true));
+      break;
+    }
+    case "focus": {
+      const node = args.toLowerCase() || null;
+      const valid = ["pi4", "pi3a", "pi3b", "c3", "wroom"];
+      if (node && !valid.includes(node)) {
+        store.addCommand(entry(trimmed, `Unknown node: ${node}. Valid: ${valid.join(", ")}`, false));
+      } else {
+        store.setFocusNode(node);
+        store.addCommand(entry(trimmed, node ? `Focused on ${node}` : "Focus cleared", true));
+      }
+      break;
+    }
+    case "view": {
+      if (args === "booth") {
+        window.location.search = "?view=booth";
+      } else {
+        window.location.search = "";
+      }
+      store.addCommand(entry(trimmed, `Switching to ${args || "operator"} view`, true));
+      break;
+    }
+    case "latency": {
+      const s = store.getState();
+      store.addCommand(entry(trimmed,
+        `Last: ${s.latencyLast}ms · p95: ${s.latencyP95}ms · Clock uncertainty: ${Math.round(s.clockUncertaintyMs)}ms`, true));
+      break;
+    }
+    case "health": {
+      const s = store.getState();
+      const nodes = Object.entries(s.nodes);
+      if (!nodes.length) {
+        store.addCommand(entry(trimmed, "No heartbeats received", false));
+      } else {
+        const lines = nodes.map(([id, n]) => {
+          const age = Math.round((Date.now() - n.lastSeen) / 1000);
+          return `${id}: ${age}s ago${n.up != null ? ` · up ${Math.round(n.up)}s` : ""}`;
+        });
+        store.addCommand(entry(trimmed, lines.join("\n"), true));
+      }
+      break;
+    }
+    case "history": {
+      store.addCommand(entry(trimmed, `Chart range set to ${args || "24h"}`, true));
+      break;
+    }
+    case "mute": {
+      const mins = parseInt(args) || 5;
+      store.setMuteUntil(Date.now() + mins * 60000);
+      store.addCommand(entry(trimmed, `Toasts muted for ${mins} minutes`, true));
+      break;
+    }
+    case "export": {
+      const s = store.getState();
+      const rows = ["id,ts,sev,title,src,body,ack,ack_ts"];
+      for (const a of s.alerts) {
+        rows.push([a.id, a.ts ?? "", a.sev, `"${(a.title || "").replace(/"/g, '""')}"`,
+          a.src, `"${(a.body || "").replace(/"/g, '""')}"`, a.ack, a.ack_ts ?? ""].join(","));
+      }
+      const blob = new Blob([rows.join("\n")], { type: "text/csv" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = `ultron-alerts-${Date.now()}.csv`; a.click();
+      URL.revokeObjectURL(url);
+      store.addCommand(entry(trimmed, `Exported ${s.alerts.length} alerts`, true));
+      break;
+    }
+    case "device": {
+      store.addCommand(entry(trimmed, `Opening device card for ${args}`, true));
+      break;
+    }
+    default:
+      store.addCommand(entry(trimmed, `Not implemented: /${name}`, false));
+  }
+}
+
+export function autocomplete(input: string): CommandDef[] {
+  if (!input.startsWith("/")) return [];
+  const q = input.slice(1).toLowerCase();
+  return COMMANDS.filter((c) => c.name.startsWith(q));
+}

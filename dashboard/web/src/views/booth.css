@@ -1,0 +1,24 @@
+/* Booth: 1920x1080, readable from 3m. Bigger everything. */
+.booth { font-size: 20px; }
+.booth .wordmark { font-size: 26px; }
+.booth .chip, .booth .pill, .booth .tag, .booth .clock { font-size: 16px; }
+.booth-main {
+  max-width: 1860px; margin: 0 auto; display: grid; gap: 18px; padding: 18px;
+  grid-template-columns: 5fr 7fr; grid-template-areas: "risk twin" "pipe pipe" "feed feed";
+}
+.booth-risk { grid-area: risk; }
+.booth-twin { grid-area: twin; }
+.booth-pipe { grid-area: pipe; }
+.booth-feed { grid-area: feed; }
+.booth .risk .numeral { font-size: 220px; }
+.booth .risk .of { font-size: 40px; }
+.booth .risk .band { font-size: 44px; }
+.booth .risk .posture { font-size: 22px; max-width: none; }
+.booth .risk .ring { width: 300px; height: 300px; }
+.booth .stage { font-size: 22px; padding: 12px 20px; }
+.booth .lat { font-size: 22px; }
+.booth .alert .ttl { font-size: 22px; }
+.booth .alert .txt { font-size: 20px; }
+.booth .feed { max-height: none; }
+/* booth shows only the latest 3 alerts */
+.booth .feed .alert:nth-child(n+4) { display: none; }

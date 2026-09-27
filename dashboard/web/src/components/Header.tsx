@@ -1,0 +1,57 @@
+import { rc } from "../dev/rc";
+import { memo, useEffect, useRef, useState } from "react";
+import { useStore } from "../store/store";
+import { utcClock } from "../lib/format";
+
+const LABEL: Record<string, string> = { live: "LIVE", stale: "STALE", offline: "OFFLINE" };
+
+function HeaderImpl() {
+  rc("Header");
+  const conn = useStore((s) => s.conn);
+  const band = useStore((s) => s.band);
+  const bump = useStore((s) => s.bandBump);
+  const [clock, setClock] = useState(utcClock());
+  const headRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    const t = window.setInterval(() => setClock(utcClock()), 1000);
+    return () => window.clearInterval(t);
+  }, []);
+
+  // Escalation sweep across the header (one-shot).
+  useEffect(() => {
+    if (!bump || !headRef.current) return;
+    const el = headRef.current;
+    el.classList.remove("sweep");
+    void el.offsetWidth;
+    el.classList.add("sweep");
+  }, [bump]);
+
+  // One accent sweep when the link recovers to LIVE.
+  const prevConn = useRef(conn);
+  useEffect(() => {
+    if (prevConn.current !== "live" && conn === "live" && headRef.current) {
+      const el = headRef.current;
+      el.classList.remove("sweep"); void el.offsetWidth; el.classList.add("sweep");
+    }
+    prevConn.current = conn;
+  }, [conn]);
+
+  return (
+    <header ref={headRef}>
+      <div className="wordmark">ULT<b>RON</b></div>
+      <div className={"chip " + conn} role="status" aria-live="polite">
+        <span className="led" />
+        <span>{LABEL[conn]}</span>
+        {conn === "live" && <span className="cursor" />}
+      </div>
+      <div className="spacer" />
+      <div className="pill">{band}</div>
+      <div className="clock">{clock} UTC</div>
+      <div className="tag">MODE: ULTRON</div>
+      <div className="session-chip">🔒</div>
+    </header>
+  );
+}
+
+export const Header = memo(HeaderImpl);

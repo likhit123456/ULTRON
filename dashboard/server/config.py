@@ -1,0 +1,69 @@
+"""ULTRON dashboard server configuration (env-driven).
+
+Owning node: Pi4 — GOVERNANCE. No secrets in code; everything via env, with
+dev-safe defaults so the same tree runs on a laptop and on the Pi4.
+"""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass, field
+from pathlib import Path
+
+VERSION = "0.3.0-phase1"
+
+# server/ -> dashboard/ ; built app lives at dashboard/dist (deploy) or web/dist (dev).
+_SERVER_DIR = Path(__file__).resolve().parent
+_DASHBOARD_DIR = _SERVER_DIR.parent
+
+
+def _default_dist() -> Path:
+    env = os.environ.get("ULTRON_DIST")
+    if env:
+        return Path(env)
+    for cand in (_DASHBOARD_DIR / "dist", _DASHBOARD_DIR / "web" / "dist"):
+        if cand.exists():
+            return cand
+    return _DASHBOARD_DIR / "dist"
+
+
+def _default_debug_html() -> Path:
+    for cand in (_DASHBOARD_DIR / "debug.html", _DASHBOARD_DIR / "debug" / "debug.html"):
+        if cand.exists():
+            return cand
+    return _DASHBOARD_DIR / "debug" / "debug.html"
+
+
+def _b(name: str, default: bool = False) -> bool:
+    return os.environ.get(name, "1" if default else "0").lower() in ("1", "true", "yes", "on")
+
+
+@dataclass(frozen=True)
+class Config:
+    http_host: str = os.environ.get("ULTRON_HTTP_HOST", "0.0.0.0")
+    http_port: int = int(os.environ.get("ULTRON_HTTP_PORT", "8080"))
+
+    mqtt_host: str = os.environ.get("ULTRON_MQTT_HOST", "127.0.0.1")
+    mqtt_port: int = int(os.environ.get("ULTRON_MQTT_PORT", "1883"))
+    mqtt_user: str = os.environ.get("ULTRON_MQTT_USER", "dash")
+    mqtt_pass: str = os.environ.get("ULTRON_MQTT_PASS", "")
+
+    evidence_db: Path = Path(os.environ.get("ULTRON_EVIDENCE_DB", "/mnt/pendrive/ultron/ultron.db"))
+    dist_dir: Path = field(default_factory=_default_dist)
+    debug_html: Path = field(default_factory=_default_debug_html)
+
+    # /debug.html gating: enabled globally, or only from the mgmt subnet with basic auth.
+    debug_enabled: bool = _b("ULTRON_DEBUG", False)
+    mgmt_subnet: str = os.environ.get("ULTRON_MGMT_SUBNET", "192.168.50.0/24")
+    debug_user: str = os.environ.get("ULTRON_DEBUG_USER", "admin")
+    debug_pass: str = os.environ.get("ULTRON_DEBUG_PASS", "")
+
+    version: str = VERSION
+
+    @property
+    def dist_index(self) -> Path:
+        return self.dist_dir / "index.html"
+
+
+def load() -> "Config":
+    return Config()

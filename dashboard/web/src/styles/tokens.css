@@ -1,0 +1,32 @@
+/* ULTRON design tokens — restrained operator console.
+   One live accent = the current band (html[data-band]); everything else grey. */
+:root {
+  --bg: #0a0e14;
+  --panel: #111823;
+  --panel-2: #0d141d;
+  --border: #1e2a3a;
+  --border-2: #26364a;
+  --text: #d7e0ea;
+  --muted: #7a8b9f;
+  --muted-2: #4a5a6e;
+
+  --green: #22c55e;
+  --yellow: #eab308;
+  --red: #ef4444;
+  --purple: #a855f7;
+
+  --accent: var(--green);
+  --accent-weak: rgba(34, 197, 94, 0.14);
+  --accent-line: rgba(34, 197, 94, 0.5);
+
+  --radius: 6px;
+  --gap: 12px;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --dur: 200ms;
+  --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+html[data-band="GREEN"]  { --accent: var(--green);  --accent-weak: rgba(34,197,94,.14);  --accent-line: rgba(34,197,94,.5); }
+html[data-band="YELLOW"] { --accent: var(--yellow); --accent-weak: rgba(234,179,8,.14);  --accent-line: rgba(234,179,8,.5); }
+html[data-band="RED"]    { --accent: var(--red);    --accent-weak: rgba(239,68,68,.16);  --accent-line: rgba(239,68,68,.55); }
+html[data-band="PURPLE"] { --accent: var(--purple); --accent-weak: rgba(168,85,247,.16); --accent-line: rgba(168,85,247,.55); }

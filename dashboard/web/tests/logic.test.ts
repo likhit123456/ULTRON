@@ -1,0 +1,96 @@
+import { describe, it, expect } from "vitest";
+import { bandForScore, isWorse, bandRank } from "../src/lib/bands";
+import { LatencyWindow, ClockSync } from "../src/lib/latency";
+import { isEnvelope, isPong } from "../src/contracts/ws";
+import { Store } from "../src/store/store";
+import type { Envelope } from "../src/contracts/ws";
+
+const env = (t: string, d: unknown, ts = Date.now() / 1000): Envelope =>
+  ({ t, ts, d } as unknown as Envelope);
+
+describe("bands", () => {
+  it("maps score to band at the exact edges", () => {
+    expect(bandForScore(0)).toBe("GREEN");
+    expect(bandForScore(29)).toBe("GREEN");
+    expect(bandForScore(30)).toBe("YELLOW");
+    expect(bandForScore(59)).toBe("YELLOW");
+    expect(bandForScore(60)).toBe("RED");
+    expect(bandForScore(84)).toBe("RED");
+    expect(bandForScore(85)).toBe("PURPLE");
+    expect(bandForScore(100)).toBe("PURPLE");
+  });
+  it("orders severity and detects worsening", () => {
+    expect(bandRank("GREEN")).toBeLessThan(bandRank("PURPLE"));
+    expect(isWorse("RED", "GREEN")).toBe(true);
+    expect(isWorse("GREEN", "RED")).toBe(false);
+  });
+});
+
+describe("latency math", () => {
+  it("computes percentiles", () => {
+    const w = new LatencyWindow(100);
+    for (let i = 1; i <= 100; i++) w.add(i);
+    expect(w.p50()).toBeGreaterThanOrEqual(50);
+    expect(w.p95()).toBeGreaterThanOrEqual(95);
+    expect(w.count()).toBe(100);
+  });
+  it("estimates a stable clock offset", () => {
+    const c = new ClockSync();
+    // server is 1000ms ahead; rtt 20ms => offset ~1000
+    for (let i = 0; i < 5; i++) c.addPong(1000, 2010, 1020);
+    expect(c.ready()).toBe(true);
+    expect(Math.abs(c.offsetMs() - 1000)).toBeLessThan(5);
+  });
+});
+
+describe("contract guards", () => {
+  it("accepts valid envelopes and pongs", () => {
+    expect(isEnvelope({ t: "score", ts: 1, d: { v: 5 } })).toBe(true);
+    expect(isEnvelope({ t: "nope", ts: 1, d: {} })).toBe(false);
+    expect(isPong({ ctl: "pong", c: 1, s: 2 })).toBe(true);
+    expect(isPong({ t: "score" })).toBe(false);
+  });
+});
+
+describe("store.applyBatch", () => {
+  it("updates score + appends history", () => {
+    const s = new Store();
+    s.applyBatch([env("score", { v: 42 })]);
+    expect(s.getState().score).toBe(42);
+    expect(s.getState().history.length).toBe(1);
+  });
+  it("bumps on worsening band only", () => {
+    const s = new Store();
+    s.applyBatch([env("band", { b: "GREEN" })]);
+    const b0 = s.getState().bandBump;
+    s.applyBatch([env("band", { b: "RED" })]);   // worse -> bump
+    s.applyBatch([env("band", { b: "GREEN" })]); // better -> no bump
+    expect(s.getState().bandBump).toBe(b0 + 1);
+    expect(s.getState().band).toBe("GREEN");
+  });
+  it("dedupes alert ids and counts open vs acked", () => {
+    const s = new Store();
+    s.applyBatch([env("alert", { id: "x", sev: "red", title: "t", src: "s", body: "b", ack: false })]);
+    s.applyBatch([env("alert", { id: "x", sev: "red", title: "t", src: "s", body: "b", ack: false })]); // dup
+    s.applyBatch([env("alert", { id: "y", sev: "red", title: "t", src: "s", body: "b", ack: true })]);
+    const st = s.getState();
+    expect(st.alerts.length).toBe(2);
+    expect(st.openCount).toBe(1);
+    expect(st.ackDone).toBe(1);
+  });
+  it("ackLocal decrements open and marks acked", () => {
+    const s = new Store();
+    s.applyBatch([env("alert", { id: "x", sev: "red", title: "t", src: "s", body: "b", ack: false })]);
+    expect(s.getState().openCount).toBe(1);
+    s.ackLocal("x");
+    expect(s.getState().openCount).toBe(0);
+    expect(s.getState().alerts[0]!.ack).toBe(true);
+  });
+  it("routes suricata/wifi alerts into detection layers", () => {
+    const s = new Store();
+    s.applyBatch([env("alert", { id: "a", sev: "red", title: "t", src: "suricata/eth0", body: "b", ack: false })]);
+    s.applyBatch([env("alert", { id: "b", sev: "yellow", title: "t", src: "wifi", body: "b", ack: false })]);
+    expect(s.getState().layers.idsCount).toBe(1);
+    expect(s.getState().layers.wifiRogue).toBe(true);
+  });
+});

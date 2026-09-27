@@ -1,0 +1,43 @@
+[Unit]
+Description=ULTRON Dashboard (Pi4 GOVERNANCE) - static + MQTT->WS bridge on :8080
+Documentation=file:///opt/ultron/dashboard
+# Dashboard needs the broker and the network up first.
+After=network-online.target mosquitto.service
+Wants=network-online.target
+Requires=mosquitto.service
+
+[Service]
+Type=simple
+User=ultron
+Group=ultron
+WorkingDirectory=/opt/ultron/dashboard
+# Bridge/serve config (override with a drop-in if paths differ).
+Environment=ULTRON_HTTP_HOST=0.0.0.0
+Environment=ULTRON_HTTP_PORT=8080
+Environment=ULTRON_MQTT_HOST=127.0.0.1
+Environment=ULTRON_MQTT_PORT=1883
+Environment=ULTRON_MQTT_USER=dash
+# Set the dashboard MQTT password via a drop-in override, not in this unit:
+#   systemctl edit sentinel-dashboard   ->   Environment=ULTRON_MQTT_PASS=...
+Environment=ULTRON_EVIDENCE_DB=/mnt/pendrive/ultron/ultron.db
+# Debug page off by default in production (enable via drop-in: ULTRON_DEBUG=1).
+Environment=ULTRON_DEBUG=0
+# Run the modular server package (dashboard/server/main.py).
+ExecStart=/usr/bin/python3 -m server.main
+Restart=always
+RestartSec=5
+
+# Hardening (Phase 1: read-only app, no privilege needed).
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+# Allow read-only access to the evidence pendrive mount.
+ReadOnlyPaths=/mnt/pendrive
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target
