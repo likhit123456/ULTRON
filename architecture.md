@@ -18,7 +18,7 @@ ULTRON is a **three-pillar, zero-cloud** IoT security ecosystem for the **smart 
 Plus ESP32-C3 (LED/OLED indicator → Pi4 serial) and ESP32-WROOM (GPIO tripwire, **no WiFi**).
 
 ```
-Detection sensors ──► MQTT (Pi4) ──► Risk Engine ──┬──► Dashboard ( :8080 )
+Detection sensors ──► MQTT (Pi4) ──► Risk Engine ──┬──► Dashboard ( https://ultron.lan )
                                                     ├──► LED / OLED
                                                     └──► Alert Manager ──► Email + Reports
 ```
@@ -32,14 +32,15 @@ Detection sensors ──► MQTT (Pi4) ──► Risk Engine ──┬──► 
 | Plane | Subnet | Medium | Purpose |
 |-------|--------|--------|---------|
 | **Production** | `192.168.100.0/24` | Ethernet switch | Smart-home sensors/hosts under watch, MQTT, dashboard |
-| **Management** | `192.168.50.0/24` | WiFi AP `SENTINEL-SECURE` (**Pi4 AC600** USB3) | Operator laptop → **only** Pi4:8080 |
+| **Management** | `192.168.50.0/24` | WiFi AP `SENTINEL-SECURE` (**Pi4 AC600** USB3) | Operator laptop → **only** `https://ultron.lan` (Pi4:443) |
 
-**Firewall sketch (nftables, deny-first):**
+**Firewall (nftables, deny-first):** see `nftables/ultron-pi4.nft`
 
 ```
-# production: allow established, lo, SSH from mgmt, Pi4:8080 from mgmt
-# Pi4: 1883/tcp MQTT only from 192.168.100.0/24
-# Pi4 AC600 (wlan1): WiFi clients forward only to 127.0.0.1:8080 / .1:8080
+# management (wlan1): 443 HTTPS, 8080 HTTP redirect, 53/67 dnsmasq, 22 SSH
+# production (eth0): 1883 MQTT only from 192.168.100.0/24, 22 SSH
+# production CANNOT reach the dashboard (no 443/8080 on eth0)
+# forward: drop all (AP clients isolated from production)
 # default drop; log drops to ring buffer
 ```
 
@@ -53,9 +54,9 @@ Detection sensors ──► MQTT (Pi4) ──► Risk Engine ──┬──► 
 |---------|------|----|-----|--------------|
 | `mosquitto` | Mosquitto | TCP 1883 / WS 9001 | — | health restart; dashboard `MQTT DEGRADED` |
 | `sentinel-risk` | Python | `ultron/*` | `ultron/risk/score`, `ultron/risk/band` (retained) | hold last score; log decay gaps |
-| `sentinel-dashboard` | Python (aiohttp) + built React/Vite static `dist/` | WS←MQTT | browser `:8080` | serve last-known + STALE banner |
+| `sentinel-dashboard` | Python (aiohttp) + built React/Vite static `dist/` | WS←MQTT | browser `https://ultron.lan` (:443) | serve last-known + STALE banner |
 | `sentinel-heal` | Python + systemd | unit states | restart actions, `ultron/health/pi4` | supervised by systemd |
-| `hostapd` + `dnsmasq` | AP on **AC600 (USB3)** | mgmt WiFi | `192.168.50.0/24` → :8080 only | dashboard still reachable on eth0 |
+| `hostapd` + `dnsmasq` | AP on **AC600 (USB3)** | mgmt WiFi | `192.168.50.0/24` → :443 only | dashboard still reachable on eth0 |
 | evidence | cron + SQLite | **pendrive (USB3)** | `reports/`, WAL DB | catch-up once; SSD is admin-key/offload only |
 | ssd-offload | scripts | portable SSD | move bulky files off Pi SD cards | keeps SD clean; not the live evidence path |
 
@@ -148,7 +149,7 @@ ESP32-WROOM (WiFi radio OFF; optional USB2 power):
   active-low · debounce 50ms · data path = GPIO only · no buzzer
 
 POWER: PSU strip → Pi4 5V/3A + Pi3a 5V/2.5A + Pi3b 5V/2.5A ≈ 38W
-MGMT:  laptop ─WiFi─► Pi4 AC600 ─► only http://192.168.100.1:8080
+MGMT:  laptop ─WiFi─► Pi4 AC600 ─► only https://ultron.lan (Pi4:443)
 ```
 
 **Wiring table**
@@ -167,7 +168,7 @@ MGMT:  laptop ─WiFi─► Pi4 AC600 ─► only http://192.168.100.1:8080
 | **Pi3a USB** | TL-WN722N | USB | Monitor mode — passive only |
 | Pi3b USB | — | — | No local storage; reports → Pi4 vault |
 | SSD (portable) | laptop / Pi dock | USB | Admin-key OS + SD-offload scripts |
-| Operator laptop | Pi4 AC600 | WiFi | **Only** Pi4:8080 allowed |
+| Operator laptop | Pi4 AC600 | WiFi | **Only** `https://ultron.lan` (Pi4:443) |
 | PSU strip | 3× Pi | DC | Shared strip, ~38 W total |
 
 **ESP32-WROOM pin map**
@@ -260,12 +261,17 @@ Envelope (alerts): `{id, sev, title, src, body, ts, ack:false}`.
 
 | Control | Implementation |
 |---------|----------------|
-| Network | dual plane; deny-all nftables |
+| Network | dual plane; deny-all nftables (`nftables/ultron-pi4.nft`) |
 | MQTT | per-client user/pass; ACL: only Pi4 writes `risk/#` |
 | SSH | key-only; password auth off |
-| Dashboard | bind LAN; optional basic auth; no WAN |
+| HTTPS | TLS 1.2+ with offline local CA (`tools/make_local_ca.sh`); HSTS `max-age=31536000`; HTTP→HTTPS 301 redirect |
+| Dashboard auth | **WebAuthn/passkey owner lock** — only registered credentials can unlock; session cookie `Secure; HttpOnly; SameSite=Strict`; session ID stored as SHA-256 hash |
+| Sessions | 1-hour TTL; revoked on logout; WS closed on session revoke |
+| Auth DB | `auth.db` in `/var/lib/ultron/` (mode 0600) — credentials, sessions, enrollment tokens, audit log; separate from evidence DB |
+| CSP | `connect-src 'self' wss://ultron.lan` in production (no wildcard `ws:`); pinned hashes for `debug.html` inline blocks |
 | Evidence | append-only daily logs; hash in report |
-| Updates | offline apt cache / vendored packages at demo |
+| Updates | offline wheelhouse (`make wheelhouse`) — air-gapped pip install |
+| CA key | **Never on the Pi** — lives on admin SSD; `make deploy` aborts if `ca.key` present |
 
 ---
 
@@ -299,11 +305,13 @@ Order: `network-online` → `mosquitto` → pillar services → dashboard.
 
 | Unit examples | Node |
 |---------------|------|
-| `mosquitto`, `sentinel-risk`, `sentinel-dashboard`, `sentinel-heal`, `hostapd`, `dnsmasq` | Pi4 Governance (AC600 USB3) |
+| `mosquitto`, `sentinel-risk`, `sentinel-dashboard`, `sentinel-heal`, `hostapd`, `dnsmasq`, `nftables` | Pi4 Governance (AC600 USB3) |
 | `suricata`, `sentinel-agg`, `sentinel-lan` | Pi3a Detection (TL-WN722N) |
 | `sentinel-alert`, `sentinel-report` | Pi3b Alert (→ Pi4 pendrive vault) |
 
 Restart=`always` with 5s delay; health publisher every 10s on `ultron/health/#`.
+
+`sentinel-dashboard` hardening: `User=ultron`, `NoNewPrivileges=yes`, `ProtectSystem=strict`, `ProtectHome=yes`, `PrivateTmp=yes`, `AmbientCapabilities=CAP_NET_BIND_SERVICE` (port 443), `ReadWritePaths=/var/lib/ultron`, `ReadOnlyPaths=/mnt/pendrive`.
 
 ---
 
@@ -319,6 +327,17 @@ health(node, ts, up, services_json);
 ```
 
 Indexes: `events(ts)`, `alerts(ack, ts)`, `scores(ts)`.
+
+**Auth DB** (`/var/lib/ultron/auth.db` — separate from evidence):
+
+```sql
+credentials(id TEXT PK, public_key BLOB, sign_count INT, label TEXT, created TEXT, revoked INT DEFAULT 0);
+sessions(sid_hash TEXT PK, created TEXT, expires TEXT);
+enrollment_tokens(token_hash TEXT PK, used INT DEFAULT 0, created TEXT);
+audit_log(id INTEGER PK, ts TEXT, event TEXT, detail TEXT);
+```
+
+Indexes: `credentials(revoked)`, `sessions(expires)`.
 
 ---
 

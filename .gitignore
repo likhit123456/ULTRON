@@ -27,6 +27,17 @@ dist/
 
 # Screenshots (evidence, not source)
 dashboard/web/screenshots/
+dashboard/cp5_*.png
 
 # Auth database (contains credentials, sessions — never commit)
 auth.db
+auth.db-shm
+auth.db-wal
+
+# TLS keys and CA (private keys never go into git)
+*.key
+ca/
+certs/
+
+# Wheelhouse (offline pip packages, too large for git)
+wheelhouse/

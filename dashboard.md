@@ -2,7 +2,7 @@
 
 > **Non-negotiable:** The dashboard is the face of Black Hat Phase 1 **alert management**. *Top notch, no compromise.* Zero dependencies. One file. &lt;100ms. Operator-grade.
 
-**Stack:** operator UI is a **React + TypeScript app built with Vite** (multi-file, `dashboard/web/`). Node/npm/Vite are used **only on the dev machine at build time**; Pi4 serves the built static output in `dist/` and fetches nothing at runtime (no CDN, no web fonts — everything same-origin/air-gapped). Runtime deps are React + ReactDOM only; charts/gauges/the hardware twin are hand-built SVG/canvas. A single standalone `debug/debug.html` (vanilla JS) is the read-only inspector. Served by Pi4 on **:8080**; real-time via WebSocket bridged from Mosquitto. There is also a **booth view** (`?view=booth`) for a 1920×1080 TV — a view, not a mode. Full reference: [`use.md`](use.md).
+**Stack:** operator UI is a **React + TypeScript app built with Vite** (multi-file, `dashboard/web/`). Node/npm/Vite are used **only on the dev machine at build time**; Pi4 serves the built static output in `dist/` and fetches nothing at runtime (no CDN, no web fonts — everything same-origin/air-gapped). Runtime deps are React + ReactDOM only; charts/gauges/the hardware twin are hand-built SVG/canvas. Server = **Python (aiohttp)** with `webauthn==3.0.1` for passkey auth. A single standalone `debug/debug.html` (vanilla JS) is the read-only inspector. Served by Pi4 on **`https://ultron.lan`** (:443, TLS with offline local CA); real-time via WebSocket bridged from Mosquitto. There is also a **booth view** (`?view=booth`) for a 1920×1080 TV — a view, not a mode. Full reference: [`use.md`](use.md).
 
 ---
 
@@ -177,12 +177,19 @@ WS envelope:
 | `toast` | `{msg,sev}` | transient banner |
 | `event` | `{topic,node,kind:"suricata"\|"wifi",sev,summary,src_ip?,dest_ip?,mac?,sig_id?}` | event feed row (no alert count change) |
 
+`lan` optional fields: `ip`, `vendor`, `known`, `first_seen`, `last_seen` — all optional, present when the bridge can resolve them.
+
 > **`event` vs `alert`:** `ultron/suricata/#` and `ultron/wifi/#` map to `t:"event"` (passthrough for the event feed), **not** `t:"alert"`. Alerts come only from `ultron/alert/#` (owned by Pi3b's alert manager). This prevents duplicate alert counts, non-persistent ACKs for bridge-generated IDs, and suricata bursts corrupting stats.
 
-**Transport-level control frames (not envelope data, never MQTT):** clock-sync ping-pong on `/ws` —
-client sends `{ctl:"ping", c:<client_ms>}`, server replies `{ctl:"pong", c, s:<server_ms>}`. The browser
-estimates its offset to the server clock so `bus → screen` latency is honest. Envelope `ts` is stamped at
-MQTT-receive time, seconds since epoch with ms precision.
+**Transport-level control frames (not envelope data, never MQTT):**
+
+| Direction | Frame | Purpose |
+|-----------|-------|---------|
+| client → server | `{"ctl":"ping","c":<client_ms>}` | clock-sync request |
+| server → client | `{"ctl":"pong","c":<client_ms>,"s":<server_ms>}` | clock-sync reply |
+| client → server | `{"ack":"<alert_id>"}` | acknowledge an alert |
+
+The browser estimates its offset to the server clock so `bus → screen` latency is honest. Envelope `ts` is stamped at MQTT-receive time, seconds since epoch with ms precision.
 
 ---
 
@@ -201,6 +208,9 @@ MQTT-receive time, seconds since epoch with ms precision.
 
 | State | Behavior |
 |-------|----------|
+| **Locked (no owner)** | Setup screen — requires one-time enrollment token to register first passkey |
+| **Locked (has owner)** | Login screen — "UNLOCK WITH PASSKEY" → biometric prompt |
+| **Authenticated** | Dashboard visible; session cookie active; WS requires valid session |
 | WS connect fail | Retry 1s,2s,5s… header `STALE`/`OFFLINE` |
 | MQTT down | Banner `MQTT DEGRADED`; last score held with age |
 | Score boundary 29/30 | Hysteresis 1 sample — no flicker |
@@ -208,12 +218,17 @@ MQTT-receive time, seconds since epoch with ms precision.
 | ACK offline | Queue; flush on reconnect |
 | Empty history | Skeleton, not error |
 | Clock skew | Use server `ts` when present |
+| Session expired | Redirected to login screen; WS closed |
+| Logout | Session revoked; WS closed within 1s |
 
 ---
 
 ## 8. Acceptance Checklist (Phase 1 — demo gate)
 
-- [ ] Opens air-gapped at `http://192.168.100.1:8080` with zero network errors  
+- [ ] Opens air-gapped at `https://ultron.lan` with valid padlock, zero network errors  
+- [ ] **Owner passkey enrollment** works on laptop (Windows Hello) and phone (fingerprint)  
+- [ ] **Unlock with passkey** works on both devices after logout  
+- [ ] **Foreign device denied** — unregistered credential rejected, audit logged  
 - [ ] Event MQTT → pixel **&lt;100ms** (measure in demo)  
 - [ ] Band change restyles accent everywhere ≤1 frame  
 - [ ] RED event → email sent + toast + gauge red  
@@ -225,31 +240,41 @@ MQTT-receive time, seconds since epoch with ms precision.
 - [ ] Tablet 1024px usable; no horizontal scroll on desktop  
 - [ ] `prefers-reduced-motion` disables animations  
 - [ ] **Same-origin only** — no external subresources in `dist/` or `debug.html`; network tab shows only same-origin requests + 1 WebSocket  
+- [ ] Logout closes WS ≤1s; session idle expiry works  
+- [ ] HTTP→HTTPS redirect works; HSTS header present  
 
 ---
 
 ## 9. File & Serve Layout (Pi4)
 
-Repo layout (built on the dev machine, `dist/` copied to Pi4):
+Repo layout (built on the dev machine, deployed via `make deploy`):
 ```
 dashboard/web/                      # React + TS source (Vite)  -> dashboard/web/dist
-dashboard/server/                   # aiohttp app: main, bridge, clock, db, csp, config
+dashboard/server/                   # aiohttp app: main, bridge, clock, db, csp, config, auth, auth_db, auth_cli
 dashboard/debug/debug.html          # standalone read-only inspector
 dashboard/tools/mock_feed.py        # dev-only demo publisher
-systemd/sentinel-dashboard.service  # After=mosquitto network-online
+tools/make_local_ca.sh              # offline CA + server cert generator
+tools/smoke_pi.sh                   # Pi4 smoke test runner
+nftables/ultron-pi4.nft             # Pi4 firewall ruleset
+systemd/sentinel-dashboard.service  # After=mosquitto network-online; hardened
+Makefile                            # wheelhouse, deploy, deploy-setup
 ```
 Deployed on Pi4:
 ```
 /opt/ultron/dashboard/dist/         # vite build output
-/opt/ultron/dashboard/server/       # python app  (python -m server.main)
-/opt/ultron/dashboard/debug.html
+/opt/ultron/dashboard/server/       # python app
+/opt/ultron/dashboard/certs/        # server.crt + server.key (0600)
+/opt/ultron/dashboard/venv/         # Python venv (air-gapped wheelhouse install)
+/opt/ultron/dashboard/debug/debug.html
+/var/lib/ultron/auth.db             # auth database (0600, owned by ultron)
 ```
 
-- HTTP :8080 → static `dist/` (`/`, `/assets/*`) + `/healthz`  
-- `/ws` → JSON bridge to Mosquitto (localhost) + ACK + clock-sync  
-- `/debug.html` off by default (`ULTRON_DEBUG=1` or mgmt subnet + basic auth); never expose :8080 to WAN  
+- HTTPS :443 → static `dist/` (`/`, `/assets/*`) + `/healthz` + `/auth/*` + `/ws`
+- HTTP :8080 → 301 redirect to `https://ultron.lan/`
+- `/ws` → JSON bridge to Mosquitto (localhost) + ACK + clock-sync; **requires session cookie + Origin**
+- `/debug.html` off by default (`ULTRON_DEBUG=1` or mgmt subnet + basic auth)
 
-**CSP (app):** `default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self' ws:; img-src 'self' data:`. `debug.html` uses the same policy with its inline `<script>`/`<style>` sha256-pinned.
+**CSP (production):** `default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self' wss://ultron.lan; img-src 'self' data:; base-uri 'self'; frame-ancestors 'none'`. `debug.html` uses the same directives with its inline `<script>`/`<style>` sha256-pinned.
 
 ---
 

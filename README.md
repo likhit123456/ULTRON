@@ -15,7 +15,7 @@
 
 ## The pitch in one paragraph
 
-Smart homes are full of cameras, locks, sensors, and hubs — and almost none of them are watched. A real SOC costs half a million to two million dollars a year; a cheap appliance still wants licenses and a cloud account. **ULTRON** is the opposite: three Raspberry Pis and two ESP32s on a shelf (~**$290**, ~**38W**, **zero cloud**) that continuously **detect → govern → alert** on the IoT layer of a smart house. Phase 1 (Black Hat Asia 2027, IoT Arsenal) ships a lean detection stack, a weighted risk engine (0–100 → GREEN/YELLOW/RED/PURPLE), alert management with ack + evidence, and a **no-compromise premium dashboard** at `http://192.168.100.1:8080` that paints every event in **under 100ms** — fully offline, fully autonomous.
+Smart homes are full of cameras, locks, sensors, and hubs — and almost none of them are watched. A real SOC costs half a million to two million dollars a year; a cheap appliance still wants licenses and a cloud account. **ULTRON** is the opposite: three Raspberry Pis and two ESP32s on a shelf (~**$290**, ~**38W**, **zero cloud**) that continuously **detect → govern → alert** on the IoT layer of a smart house. Phase 1 (Black Hat Asia 2027, IoT Arsenal) ships a lean detection stack, a weighted risk engine (0–100 → GREEN/YELLOW/RED/PURPLE), alert management with ack + evidence, and a **no-compromise premium dashboard** at `https://ultron.lan` (HTTPS with offline local CA, WebAuthn passkey lock) that paints every event in **under 100ms** — fully offline, fully autonomous.
 
 ---
 
@@ -179,7 +179,7 @@ Matches [`architecture.md`](architecture.md) §3.6. Full tables there.
     ├── GPIO ◄─── WROOM GPIO17 (case reed, active-low, 50ms debounce)
     └── eth0 ──── switch
 
-  MGMT:  laptop ─WiFi─► SENTINEL-SECURE ─► only http://192.168.100.1:8080
+  MGMT:  laptop ─WiFi─► SENTINEL-SECURE ─► only https://ultron.lan (Pi4:443)
   POWER: shared strip → 3× Pi ≈ 38 W · all on-prem · zero cloud
 ```
 
@@ -199,7 +199,7 @@ Matches [`architecture.md`](architecture.md) §3.6. Full tables there.
 | WROOM GPIO16 | Pi3a GPIO | jumper | Case reed, pull-up, LOW = open |
 | WROOM GPIO17 | Pi3b GPIO | jumper | Case reed, pull-up, LOW = open |
 | WROOM power | USB2 or 3V3 | — | Radio **off**; cannot be remote-disarmed |
-| Operator laptop | Pi4 AC600 WiFi | WPA2 | Reaches **only** `http://192.168.100.1:8080` |
+| Operator laptop | Pi4 AC600 WiFi | WPA2 | Reaches **only** `https://ultron.lan` (Pi4:443) |
 | PSU strip | 3× Pi | DC | Shared strip, ~38W total |
 
 ### ESP32-WROOM tripwire pins
@@ -224,7 +224,7 @@ Matches [`architecture.md`](architecture.md) §3.6. Full tables there.
 
 ## 6. Premium dashboard (the showpiece)
 
-> **No compromise.** **React + TypeScript (Vite)**, built to static and served air-gapped from Pi4:**8080** (React + ReactDOM only; hand-built SVG/canvas; zero CDNs/web fonts). A restrained operator console + a hardware-twin hero, plus a booth view (`?view=booth`) and a standalone read-only `debug.html`. Event → pixel **&lt;100ms** (measured bus→screen p95 ≈ 36ms). Full reference: [`use.md`](use.md).
+> **No compromise.** **React + TypeScript (Vite)**, built to static and served air-gapped from Pi4 at **`https://ultron.lan`** (:443, TLS with offline local CA; WebAuthn passkey lock). React + ReactDOM only; hand-built SVG/canvas; zero CDNs/web fonts. A restrained operator console + a hardware-twin hero, plus a booth view (`?view=booth`) and a standalone read-only `debug.html`. Event → pixel **&lt;100ms** (measured bus→screen p95 ≈ 36ms). Full reference: [`use.md`](use.md).
 
 | Region | What you see |
 |--------|----------------|
@@ -256,8 +256,9 @@ Matches [`architecture.md`](architecture.md) §3.6. Full tables there.
 
 ### 4-minute demo script
 
-1. **0:00** Shelf + dual-plane diagram: production switch vs `SENTINEL-SECURE`.  
-2. **0:30** Open dashboard air-gapped → mentor reads risk, band, nodes in &lt;3s.  
+0. **0:00** **Unlock with fingerprint** — phone/laptop on `SENTINEL-SECURE` → `https://ultron.lan` → passkey biometric → dashboard loads.  
+1. **0:15** Shelf + dual-plane diagram: production switch vs `SENTINEL-SECURE`.  
+2. **0:45** Dashboard live → mentor reads risk, band, nodes in &lt;3s.  
 3. **1:15** Open tripwire case → edge → score jump → pixel &lt;100ms.  
 4. **2:00** Drive score to RED → email arrives + band theme restyles + LED strobe.  
 5. **2:45** ACK an alert → badge clears → refresh → still acked (SQLite).  
@@ -274,6 +275,7 @@ Matches [`architecture.md`](architecture.md) §3.6. Full tables there.
 | SSD vs pendrive? | Pendrive = live evidence on Pi4 USB3. SSD = admin-key OS + SD offload scripts. |
 | Who writes risk topics? | **Only Pi4** (MQTT ACL). |
 | Response? | Phase 2 — Phase 1 is notify-only by design. |
+| What stops someone else's phone? | Only passkeys registered to the owner are accepted — the server checks the credential ID against the allowlist. |
 
 **Submission killers avoided:** scope creep into Phase 2 UI, cloud dependency, dual modes, enterprise-only jargon, dashboard CDN.
 
@@ -335,7 +337,8 @@ sudo systemctl enable --now mosquitto
 #    Governance (Pi4): risk, dashboard, health, hostapd/dnsmasq (AC600), SSD offload
 
 # 6. Open the showpiece (from mgmt WiFi SENTINEL-SECURE)
-#    http://192.168.100.1:8080
+#    https://ultron.lan  (install CA cert from ca/ca.crt first)
+#    Unlock with passkey (fingerprint / Windows Hello)
 ```
 
 ---

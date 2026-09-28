@@ -94,13 +94,18 @@ def _get_origins(request: web.Request) -> list[str]:
     return request.app["auth_origins"]
 
 
+def _secure_cookies(request: web.Request) -> bool:
+    return request.app.get("auth_secure_cookies", False)
+
+
 def _set_ceremony_cookie(
     resp: web.Response, ceremony_id: str,
+    *, secure: bool = False,
 ) -> None:
     resp.set_cookie(
         CEREMONY_COOKIE, ceremony_id,
         max_age=CEREMONY_TTL, httponly=True,
-        samesite="Strict", secure=False, path="/auth/",
+        samesite="Strict", secure=secure, path="/auth/",
     )
 
 
@@ -111,11 +116,14 @@ def _get_ceremony_id(request: web.Request) -> str:
     return cid
 
 
-def _set_session_cookie(resp: web.Response, sid: str) -> None:
+def _set_session_cookie(
+    resp: web.Response, sid: str,
+    *, secure: bool = False,
+) -> None:
     resp.set_cookie(
         SESSION_COOKIE, sid,
         max_age=SESSION_TTL, httponly=True,
-        samesite="Strict", secure=False, path="/",
+        samesite="Strict", secure=secure, path="/",
     )
 
 
@@ -173,7 +181,7 @@ async def handle_setup(request: web.Request) -> web.Response:
         text=webauthn.options_to_json(options),
         content_type="application/json",
     )
-    _set_ceremony_cookie(resp, ceremony_id)
+    _set_ceremony_cookie(resp, ceremony_id, secure=_secure_cookies(request))
     return resp
 
 
@@ -215,7 +223,7 @@ async def handle_setup_complete(request: web.Request) -> web.Response:
 
     sid = auth_db.create_session(cred_id, ip=request.remote, ttl=SESSION_TTL)
     resp = web.json_response({"status": "ok", "credential_id": cred_id})
-    _set_session_cookie(resp, sid)
+    _set_session_cookie(resp, sid, secure=_secure_cookies(request))
     return resp
 
 
@@ -255,7 +263,7 @@ async def handle_register_begin(request: web.Request) -> web.Response:
         text=webauthn.options_to_json(options),
         content_type="application/json",
     )
-    _set_ceremony_cookie(resp, ceremony_id)
+    _set_ceremony_cookie(resp, ceremony_id, secure=_secure_cookies(request))
     return resp
 
 
@@ -328,7 +336,7 @@ async def handle_login_begin(request: web.Request) -> web.Response:
         text=webauthn.options_to_json(options),
         content_type="application/json",
     )
-    _set_ceremony_cookie(resp, ceremony_id)
+    _set_ceremony_cookie(resp, ceremony_id, secure=_secure_cookies(request))
     return resp
 
 
@@ -387,7 +395,7 @@ async def handle_login_complete(request: web.Request) -> web.Response:
     auth_db.audit("login_success", ip=ip, credential_id=raw_id)
 
     resp = web.json_response({"status": "ok"})
-    _set_session_cookie(resp, sid)
+    _set_session_cookie(resp, sid, secure=_secure_cookies(request))
     return resp
 
 

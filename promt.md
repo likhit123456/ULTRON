@@ -111,7 +111,7 @@ Assign every task, component, and failure to exactly one node. Never blur pillar
 
 | Area | Bar |
 |------|-----|
-| **Dashboard** | No compromise. Dark operator theme, band-colored, gauge, sparklines, alert cards, node grid, &lt;100ms, offline, tablet-OK. |
+| **Dashboard** | No compromise. Dark operator theme, band-colored, gauge, sparklines, alert cards, node grid, &lt;100ms, offline, tablet-OK. React + TypeScript (Vite); `debug.html` is vanilla JS only. HTTPS with offline local CA; WebAuthn passkey owner lock (server-side only). |
 | **Security** | Deny-all firewall first; SSH keys; MQTT auth; mgmt WiFi ≠ production LAN. |
 | **Observability** | Every event: ts, source, severity, delta — SQLite + screen + email when RED+. |
 | **Failure** | Fail-visible on monitoring paths (DEGRADED banner). Never silent. |
@@ -130,7 +130,7 @@ Production LAN  192.168.100.0/24  (wired switch — house LAN)
   .10+ monitored smart-home hosts / IoT targets on span
 
 Management LAN  192.168.50.0/24  (AP SENTINEL-SECURE on Pi4 AC600 USB3)
-  laptop → http://192.168.100.1:8080 only
+  laptop → https://ultron.lan only (Pi4:443, TLS with offline local CA, WebAuthn passkey lock)
 
 ESP32-C3   → USB2 serial → Pi4 (+ OLED on mini GPIO)
 ESP32-WROOM → GPIO → Pi3a / Pi3b case reeds (optional USB2 power, radio OFF)
@@ -166,6 +166,7 @@ ultron/health/#          all   →  Pi4
 7. **Sync docs** you touch (`README.md`, `architecture.md`, `dashboard.md`, `blackhat.md`).  
 8. **Cost guardrail** — full build ≤ ~$290 unless operator approves.  
 9. **Backup** — `ULTRON(SEN3)/` is frozen; gitignored; never edit inside it.
+10. **Owner lock is server-side only** — WebAuthn verification, session management, and credential storage happen in `server/auth.py` + `server/auth_db.py`. The browser never stores keys or secrets.
 
 ### 9. SUCCESS CRITERIA (PHASE 1 DEMO)
 

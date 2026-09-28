@@ -278,7 +278,7 @@ Smart-house desktop/shelf stack: three boards next to the home router and switch
 | Monitored hosts | .10+ |
 | Mgmt clients | 192.168.50.0/24 |
 
-Firewall: deny-by-default; mgmt plane may reach **only** `192.168.100.1:8080` (plus SSH as configured).
+Firewall: deny-by-default nftables (`nftables/ultron-pi4.nft`); mgmt plane may reach **only** `https://ultron.lan` (Pi4:443) plus SSH. Production plane cannot reach the dashboard.
 
 ---
 
@@ -416,12 +416,14 @@ Daily file written to the **Pi4 USB3 pendrive vault** (synced from Pi3b): band t
 
 | Requirement | Value |
 |-------------|-------|
-| Delivery | One `index.html`, inline CSS/JS |
-| Dependencies | **None** (no CDN, no build) |
+| Stack | React + TypeScript (Vite) → static `dist/`; server = Python aiohttp |
+| Dependencies | Air-gapped (no CDN, no external fetch at runtime) |
 | Latency | MQTT → pixel **&lt;100ms** |
-| Port | Pi4 **:8080** |
-| Features | Gauge, band theme, node grid, detection layers (IDS/LAN/WiFi/tripwire), alert feed + ACK, 24h chart, stats |
-| States | LIVE / STALE / OFFLINE |
+| Transport | HTTPS on Pi4 **:443** (TLS with offline local CA); HTTP :8080 → 301 redirect |
+| Auth | **WebAuthn/passkey owner lock** — only registered credentials can unlock |
+| CSP | `connect-src 'self' wss://ultron.lan` (no wildcard) |
+| Features | Gauge, band theme, node grid, detection layers (IDS/LAN/WiFi/tripwire), alert feed + ACK, 24h chart, stats, command console |
+| States | Locked (setup / login) → LIVE / STALE / OFFLINE |
 
 The dashboard is the **centerpiece of alert management** and the first thing a mentor sees.
 
@@ -531,12 +533,17 @@ Cloud dashboards fail when the network is degraded. LED/OLED keeps posture visib
 
 | Control | Setting |
 |---------|---------|
-| Firewall | nftables deny-first; mgmt→8080 only |
+| Firewall | nftables deny-first (`nftables/ultron-pi4.nft`); mgmt: 443/8080/53/67/22; prod: 1883/22 only |
+| TLS | HTTPS :443 with offline local CA (EC P-256); HTTP :8080 → 301; HSTS `max-age=31536000` |
+| Auth | WebAuthn/passkey owner lock; session = SHA-256 hash; enrollment token printed once |
 | SSH | Keys only; no password |
 | MQTT | Auth + ACL (only Pi4 writes `risk/#`) |
-| Dashboard | LAN bind; no WAN; optional basic auth |
-| Secrets | `/etc/sentinel/*` root:600 |
-| Updates | Offline cache before demo |
+| Dashboard | LAN bind; no WAN; Secure/HttpOnly/SameSite=Strict cookies |
+| CSP | `connect-src 'self' wss://ultron.lan`; no inline; `frame-ancestors 'none'` |
+| CA key | Offline admin SSD only; never on Pi or in git; `Makefile` aborts if present |
+| Secrets | `certs/server.key` 0600 ultron:ultron; `auth.db` 0600; `/etc/sentinel/*` root:600 |
+| systemd | `NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`, `CAP_NET_BIND_SERVICE` |
+| Updates | Offline wheelhouse (`pip download --platform manylinux2014_aarch64`) |
 | Evidence | Append-only daily files + hashes in report |
 
 ---

@@ -338,7 +338,9 @@ Dot + label + value each; no invented layers.
 
 ## B10. Track B acceptance (= dashboard.md §8)
 
-- [ ] Opens **air-gapped** at `http://192.168.100.1:8080` — zero network errors  
+- [ ] Opens **air-gapped** at `https://ultron.lan` — valid padlock, zero network errors  
+- [ ] **Passkey enrollment** works on laptop + phone  
+- [ ] **Unlock with passkey** works after logout on both devices  
 - [ ] Event MQTT → pixel **<100ms**  
 - [ ] Band change restyles accent everywhere ≤1 frame  
 - [ ] RED → email + toast + gauge red  
@@ -349,7 +351,20 @@ Dot + label + value each; no invented layers.
 - [ ] 24h chart draws from history on first load  
 - [ ] Tablet ~1024px usable; no horizontal scroll on desktop  
 - [ ] `prefers-reduced-motion` respected  
-- [ ] View-source: **one file**, no http(s) subresources  
+- [ ] View-source: no external http(s) subresources  
+- [ ] Logout closes WS ≤1s; session idle expiry works
+
+## B11. Deployment (air-gapped Pi4)
+
+| Step | Action | Done when |
+|------|--------|-----------|
+| B11.1 | `make wheelhouse` — download aarch64 wheels on dev machine | `wheelhouse/` contains all deps |
+| B11.2 | `make deploy PI=ultron@192.168.50.1` — rsync to Pi; `ca/` excluded; `server.key` 0600 | files on Pi |
+| B11.3 | Pi venv: `pip install --no-index --find-links wheelhouse/` | venv works offline |
+| B11.4 | `tools/make_local_ca.sh` — generate CA + server cert; install CA on devices | padlock valid |
+| B11.5 | `python -m server.auth_cli enroll-token` — first-time enrollment | owner registered |
+| B11.6 | `sudo systemctl enable --now sentinel-dashboard` | service running |
+| B11.7 | `sudo cp nftables/ultron-pi4.nft /etc/nftables.conf && sudo systemctl enable --now nftables` | firewall active |  
 
 ---
 

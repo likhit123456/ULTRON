@@ -1,0 +1,69 @@
+#!/usr/sbin/nft -f
+# ULTRON Pi4 (GOVERNANCE) — nftables firewall
+#
+# Management plane  : 192.168.50.0/24  (wlan1, SENTINEL-SECURE AP)
+# Production plane   : 192.168.100.0/24 (eth0, sensor/MQTT network)
+#
+# Policy: default drop, log drops to ring buffer.
+#
+# Install:
+#   sudo cp nftables/ultron-pi4.nft /etc/nftables.conf
+#   sudo systemctl enable --now nftables
+
+flush ruleset
+
+table inet ultron {
+
+    chain input {
+        type filter hook input priority 0; policy drop;
+
+        # ── Loopback ────────────────────────────────────────────────────
+        iif "lo" accept
+
+        # ── Established / related ───────────────────────────────────────
+        ct state established,related accept
+        ct state invalid drop
+
+        # ── ICMP (ping for diagnostics) ─────────────────────────────────
+        ip protocol icmp accept
+        ip6 nexthdr ipv6-icmp accept
+
+        # ── Management plane (192.168.50.0/24 via wlan1) ────────────────
+        # HTTPS dashboard
+        iifname "wlan1" ip saddr 192.168.50.0/24 tcp dport 443 accept
+        # HTTP redirect
+        iifname "wlan1" ip saddr 192.168.50.0/24 tcp dport 8080 accept
+        # dnsmasq DNS (for AP clients)
+        iifname "wlan1" ip saddr 192.168.50.0/24 udp dport 53 accept
+        iifname "wlan1" ip saddr 192.168.50.0/24 tcp dport 53 accept
+        # dnsmasq DHCP (for AP clients)
+        iifname "wlan1" ip saddr 192.168.50.0/24 udp dport 67 accept
+        # SSH from management only
+        iifname "wlan1" ip saddr 192.168.50.0/24 tcp dport 22 accept
+
+        # ── Production plane (192.168.100.0/24 via eth0) ────────────────
+        # MQTT from production nodes only
+        iifname "eth0" ip saddr 192.168.100.0/24 tcp dport 1883 accept
+        # SSH from production (for node management)
+        iifname "eth0" ip saddr 192.168.100.0/24 tcp dport 22 accept
+
+        # ── Production plane CANNOT reach the dashboard ─────────────────
+        # (no port 443/8080 rule on eth0 — implicitly dropped)
+
+        # ── Log + drop everything else ──────────────────────────────────
+        log prefix "ultron-drop: " group 0 queue-threshold 10
+        counter drop
+    }
+
+    chain forward {
+        type filter hook forward priority 0; policy drop;
+
+        # AP clients on wlan1 must NOT be forwarded to production net
+        log prefix "ultron-fwd-drop: " group 0 queue-threshold 10
+        counter drop
+    }
+
+    chain output {
+        type filter hook output priority 0; policy accept;
+    }
+}

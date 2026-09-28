@@ -10,7 +10,7 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-VERSION = "0.4.0-phase1"
+VERSION = "0.5.0-phase1"
 
 # server/ -> dashboard/ ; built app lives at dashboard/dist (deploy) or web/dist (dev).
 _SERVER_DIR = Path(__file__).resolve().parent
@@ -58,6 +58,16 @@ class Config:
     debug_user: str = os.environ.get("ULTRON_DEBUG_USER", "admin")
     debug_pass: str = os.environ.get("ULTRON_DEBUG_PASS", "")
 
+    # TLS (CP6)
+    tls_cert: Path | None = field(default_factory=lambda: (
+        Path(p) if (p := os.environ.get("ULTRON_TLS_CERT")) else None
+    ))
+    tls_key: Path | None = field(default_factory=lambda: (
+        Path(p) if (p := os.environ.get("ULTRON_TLS_KEY")) else None
+    ))
+    https_port: int = int(os.environ.get("ULTRON_HTTPS_PORT", "443"))
+    redirect_http: bool = _b("ULTRON_REDIRECT_HTTP", True)
+
     # Auth (CP4)
     auth_db: Path = Path(os.environ.get("ULTRON_AUTH_DB",
                                          str(_DASHBOARD_DIR / "auth.db")))
@@ -71,6 +81,10 @@ class Config:
     session_ttl: int = int(os.environ.get("ULTRON_SESSION_TTL", "3600"))
 
     version: str = VERSION
+
+    @property
+    def tls_enabled(self) -> bool:
+        return self.tls_cert is not None and self.tls_key is not None
 
     @property
     def dist_index(self) -> Path:
@@ -108,6 +122,16 @@ def _validate(cfg: "Config") -> None:
         )
     except ValueError:
         pass  # not an IP — that's correct
+
+    if cfg.tls_cert or cfg.tls_key:
+        if not (cfg.tls_cert and cfg.tls_key):
+            raise ConfigError(
+                "Both ULTRON_TLS_CERT and ULTRON_TLS_KEY must be set together"
+            )
+        if not cfg.tls_cert.exists():
+            raise ConfigError(f"TLS cert not found: {cfg.tls_cert}")
+        if not cfg.tls_key.exists():
+            raise ConfigError(f"TLS key not found: {cfg.tls_key}")
 
 
 def load() -> "Config":

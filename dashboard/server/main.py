@@ -1,4 +1,4 @@
-"""ULTRON dashboard web server (Pi4 — GOVERNANCE, :8080).
+"""ULTRON dashboard web server (Pi4 — GOVERNANCE).
 
 Routes: /  /assets/*  /debug.html  /ws  /healthz  /auth/*
 (+ /favicon.ico and a SPA fallback — justified in use.md).
@@ -6,6 +6,10 @@ Routes: /  /assets/*  /debug.html  /ws  /healthz  /auth/*
 Serves the built React app, bridges MQTT<->/ws, replays history + acked alerts
 on join, handles ACK and clock-sync control frames. Never writes ultron/risk/#.
 WebSocket upgrade requires valid session + Origin header.
+
+TLS: when ULTRON_TLS_CERT + ULTRON_TLS_KEY are set, serves HTTPS on
+ULTRON_HTTPS_PORT (default 443). Plain HTTP on ULTRON_HTTP_PORT redirects
+to the HTTPS origin with 301.
 """
 
 from __future__ import annotations
@@ -17,6 +21,7 @@ import ipaddress
 import json
 import logging
 import os
+import ssl
 import time
 from pathlib import Path
 
@@ -79,7 +84,9 @@ async def handle_index(request: web.Request) -> web.Response:
     resp = web.Response(text=cfg.dist_index.read_text(encoding="utf-8"),
                         content_type="text/html", charset="utf-8")
     resp.headers["Cache-Control"] = "no-store"
-    return csp.apply(resp, csp.CSP_APP)
+    if cfg.tls_enabled:
+        resp.headers["Strict-Transport-Security"] = "max-age=31536000"
+    return csp.apply(resp, request.app["csp_app"])
 
 
 async def handle_asset(request: web.Request) -> web.StreamResponse:
@@ -93,7 +100,7 @@ async def handle_asset(request: web.Request) -> web.StreamResponse:
         raise web.HTTPNotFound()
     resp = web.FileResponse(target)
     resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
-    return csp.apply(resp, csp.CSP_APP)
+    return csp.apply(resp, request.app["csp_app"])
 
 
 async def handle_spa(request: web.Request) -> web.Response:
@@ -105,7 +112,7 @@ async def handle_favicon(request: web.Request) -> web.StreamResponse:
     cfg: Config = request.app["cfg"]
     fav = cfg.dist_dir / "favicon.ico"
     if fav.is_file():
-        return csp.apply(web.FileResponse(fav), csp.CSP_APP)
+        return csp.apply(web.FileResponse(fav), request.app["csp_app"])
     return web.Response(status=204)
 
 
@@ -254,19 +261,26 @@ def create_app(cfg: Config | None = None) -> web.Application:
     app["auth_rp_id"] = cfg.rp_id
     app["auth_rp_name"] = cfg.rp_name
     app["auth_origins"] = cfg.origins
+    app["auth_secure_cookies"] = cfg.tls_enabled
     session_mgr = SessionWsManager()
     app["session_mgr"] = session_mgr
 
     add_auth_routes(app)
 
+    app["csp_app"] = csp.csp_app(tls=cfg.tls_enabled, rp_id=cfg.rp_id, https_port=cfg.https_port)
+
     if cfg.debug_html.exists():
         html = cfg.debug_html.read_text(encoding="utf-8")
-        app["debug_page"] = (html, csp.build_csp_for_html(html))
+        app["debug_page"] = (
+            html,
+            csp.build_csp_for_html(html, tls=cfg.tls_enabled, rp_id=cfg.rp_id, https_port=cfg.https_port),
+        )
         LOG.info("debug.html loaded from %s", cfg.debug_html)
     else:
         app["debug_page"] = None
 
-    LOG.info("dist=%s (exists=%s) version=%s", cfg.dist_dir, cfg.dist_dir.exists(), cfg.version)
+    LOG.info("dist=%s (exists=%s) version=%s tls=%s",
+             cfg.dist_dir, cfg.dist_dir.exists(), cfg.version, cfg.tls_enabled)
 
     app.add_routes([
         web.get("/ws", handle_ws),
@@ -282,13 +296,56 @@ def create_app(cfg: Config | None = None) -> web.Application:
     return app
 
 
+def _make_redirect_app(https_origin: str) -> web.Application:
+    """Tiny app that 301-redirects every request to the HTTPS origin."""
+    async def redirect(request: web.Request) -> web.Response:
+        target = f"{https_origin}{request.path_qs}"
+        raise web.HTTPMovedPermanently(target)
+
+    app = web.Application()
+    app.router.add_route("*", "/{path:.*}", redirect)
+    return app
+
+
+async def _run_tls(cfg: Config) -> None:
+    """Start both the HTTPS app and the HTTP redirect."""
+    ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ssl_ctx.load_cert_chain(str(cfg.tls_cert), str(cfg.tls_key))
+    ssl_ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+
+    app = create_app(cfg)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, cfg.http_host, cfg.https_port, ssl_context=ssl_ctx)
+    await site.start()
+    LOG.info("HTTPS listening on %s:%d", cfg.http_host, cfg.https_port)
+
+    if cfg.redirect_http:
+        port_suffix = f":{cfg.https_port}" if cfg.https_port != 443 else ""
+        https_origin = f"https://{cfg.rp_id}{port_suffix}"
+        redir_app = _make_redirect_app(https_origin)
+        redir_runner = web.AppRunner(redir_app)
+        await redir_runner.setup()
+        redir_site = web.TCPSite(redir_runner, cfg.http_host, cfg.http_port)
+        await redir_site.start()
+        LOG.info("HTTP redirect on :%d → %s", cfg.http_port, https_origin)
+
+    try:
+        await asyncio.Event().wait()
+    finally:
+        await runner.cleanup()
+
+
 def main() -> None:
     logging.basicConfig(level=os.environ.get("ULTRON_LOG", "INFO"),
                         format="%(asctime)s %(levelname)s %(name)s %(message)s")
     if os.name == "nt":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     cfg = load()
-    web.run_app(create_app(cfg), host=cfg.http_host, port=cfg.http_port, print=None)
+    if cfg.tls_enabled:
+        asyncio.run(_run_tls(cfg))
+    else:
+        web.run_app(create_app(cfg), host=cfg.http_host, port=cfg.http_port, print=None)
 
 
 if __name__ == "__main__":

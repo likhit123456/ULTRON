@@ -1,10 +1,10 @@
 # ULTRON — Dashboard `use.md`
 
-> Complete reference for the **Phase 1 dashboard** (owning node: **Pi4 — GOVERNANCE**, `192.168.100.1:8080`).
-> Written from the actual code (routes, subscriptions, publishes and SQL were grepped — see §12 for the commands + counts).
+> Complete reference for the **Phase 1 dashboard** (owning node: **Pi4 — GOVERNANCE**, `https://ultron.lan`).
+> Written from the actual code (routes, subscriptions, publishes and SQL were grepped).
 > Phase 1 is **notify-only**: nothing here blocks, quarantines, or responds. That is Phase 2.
 
-**Stack:** operator UI = **React + TypeScript, built with Vite** (multi-file, `dashboard/web/`). The Pi4 serves only the built static output in `dist/` — it never runs Node/npm and fetches nothing from the internet at runtime. Server = **Python (aiohttp) `dashboard/server/`**. Debug page = one standalone `dashboard/debug/debug.html` (vanilla JS).
+**Stack:** operator UI = **React + TypeScript, built with Vite** (multi-file, `dashboard/web/`). The Pi4 serves only the built static output in `dist/` — it never runs Node/npm and fetches nothing from the internet at runtime. Server = **Python (aiohttp + webauthn==3.0.1) `dashboard/server/`**, serving HTTPS on :443 with offline local CA and WebAuthn passkey owner lock. Debug page = one standalone `dashboard/debug/debug.html` (vanilla JS).
 
 ---
 
@@ -33,10 +33,10 @@ cd dashboard && python -m pytest        # pytest (server)
 
 **Deploy to Pi4**
 ```bash
-sudo mkdir -p /opt/ultron/dashboard
-sudo cp -r dashboard/web/dist /opt/ultron/dashboard/dist
-sudo cp -r dashboard/server   /opt/ultron/dashboard/server
-sudo cp dashboard/debug/debug.html /opt/ultron/dashboard/debug.html
+# Rsync deploy (includes certs/server.key as 0600; excludes ca/ and ca.key)
+make deploy PI=ultron@192.168.50.1
+
+# Install systemd unit
 sudo cp systemd/sentinel-dashboard.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now sentinel-dashboard   # start
 sudo systemctl stop sentinel-dashboard                                           # stop
@@ -224,6 +224,10 @@ Modes: **client** = runs in browser, no server; **server** = requires authentica
 | `ULTRON_MGMT_SUBNET` | `192.168.50.0/24` | subnet allowed to reach `/debug.html` with auth |
 | `ULTRON_DEBUG_USER` / `ULTRON_DEBUG_PASS` | `admin` / `` | Basic auth for `/debug.html` |
 | `ULTRON_LOG` | `INFO` | log level |
+| `ULTRON_TLS_CERT` | *(none)* | path to server certificate (PEM); enables HTTPS when both cert+key are set |
+| `ULTRON_TLS_KEY` | *(none)* | path to server private key (PEM) |
+| `ULTRON_HTTPS_PORT` | `443` | HTTPS listen port (used only when TLS enabled) |
+| `ULTRON_REDIRECT_HTTP` | `1` | `1` = plain HTTP on `ULTRON_HTTP_PORT` returns 301 → HTTPS |
 | `ULTRON_AUTH_DB` | `dashboard/auth.db` | auth SQLite (sessions, credentials, audit) |
 | `ULTRON_RP_ID` | `localhost` | WebAuthn relying party ID (must be hostname, not IP) |
 | `ULTRON_RP_NAME` | `ULTRON` | WebAuthn relying party display name |
@@ -234,6 +238,8 @@ Modes: **client** = runs in browser, no server; **server** = requires authentica
 1. `ULTRON_ORIGINS` contains a non-localhost `http://` origin
 2. `ULTRON_DEBUG=1` with a non-localhost `ULTRON_RP_ID`
 3. `ULTRON_RP_ID` is an IP address (must be a hostname)
+4. Only one of `ULTRON_TLS_CERT` / `ULTRON_TLS_KEY` is set (must be both or neither)
+5. TLS cert or key file does not exist
 
 ---
 
@@ -242,6 +248,10 @@ Modes: **client** = runs in browser, no server; **server** = requires authentica
 | Issue | Status | Detail |
 |-------|--------|--------|
 | **Unauthenticated WS ACK** | **closed (CP4)** | WS upgrade now requires a valid session cookie and matching `Origin` header. ACK is accepted only on an authenticated socket. Prior to CP4, any LAN client could send `{"ack":"<id>"}` over WS and acknowledge alerts without authentication. |
+| **Fake-alert mapping** | **closed (CP5)** | `ultron/suricata/#` and `ultron/wifi/#` are now surfaced as `t:"event"` (structured passthrough), **not** `t:"alert"`. Alerts come only from `ultron/alert/#` (Pi3b alert manager). Prevents duplicate alert counts, non-persistent ACKs for bridge-generated IDs, and suricata bursts corrupting ack stats. |
+| **Logout not closing WS** | **closed (CP6)** | `handle_logout` now calls `session_mgr.close_session_sockets(sid_hash)` to close all WebSockets for the revoked session within 1 s (code 4401). Previously, WS connections could outlive a revoked session until the next heartbeat check. |
+| **auth.db WAL mode** | **closed (CP6)** | `auth_db.py` opens with `PRAGMA journal_mode=WAL` for crash resilience and has an explicit `close()` called on shutdown. WAL prevents partial writes to the credential and session tables on unclean process exit. |
+| **Rate limiter counting all attempts** | **closed (CP6)** | `_check_rate` counts every auth request (success and failure) — 5 per 5-minute window with exponential backoff. This is intentional: counting only failures would let an attacker with a valid credential rotate it against rate limits. Audit log records `rate_limited` events. |
 
 ---
 
@@ -252,3 +262,322 @@ Modes: **client** = runs in browser, no server; **server** = requires authentica
 - **hardware.png vs docs (docs authoritative):** (1) switch port numbering; (2) ESP32-WROOM shown on USB "serial" vs docs GPIO-only/radio-off; (3) pendrive on USB2 hub vs Pi4 USB3; (4) TL-WN722N on Pi4 vs Pi3a; (5) SSD "NAS" vs admin-key/offload; (6) extra USB2 hub (docs: none); (7) fan vs passive heatsink; (8) 3 AC outlets vs one PSU strip; (9) tripwire Pi-side pin labels vs the `ultron/tripwire/pi3a|pi3b` topic contract. The hardware twin follows **architecture.md §3.6**.
 
 Phase 2 (response) and Phase 3 (hunting) are documented in the roadmap only — no code shipped.
+
+---
+
+## 10. HTTPS with local CA (`ultron.lan`)
+
+### 10.1 Generating certificates
+
+Run from the repo root:
+
+```bash
+bash tools/make_local_ca.sh
+```
+
+This creates:
+- `ca/ca.key` — root CA private key (**never goes on the Pi or into git**)
+- `ca/ca.crt` — root CA certificate (install on owner devices)
+- `certs/server.crt` — server certificate for `ultron.lan` (deploy to Pi)
+- `certs/server.key` — server private key (deploy to Pi, mode 0600)
+
+To reissue a server certificate from the existing CA (e.g., nearing expiry):
+
+```bash
+bash tools/make_local_ca.sh --reissue
+```
+
+### 10.2 Installing the CA certificate on owner devices
+
+After generating, note the SHA-256 fingerprint printed by the script. Verify it matches on each device before trusting.
+
+**Android:**
+1. Copy `ca/ca.crt` to the phone (USB, QR, AirDrop).
+2. Settings → Security → Encryption & credentials → Install a certificate → **CA certificate**.
+3. Select `ca.crt`. Confirm the fingerprint matches.
+4. The certificate appears under "User certificates".
+
+**Windows:**
+1. Press Win+R → type `certmgr.msc` → Enter.
+2. Right-click **Trusted Root Certification Authorities → Certificates** → All Tasks → **Import**.
+3. Select `ca/ca.crt`. Finish the wizard.
+4. Verify: double-click the imported cert → Details → Thumbprint (SHA-256) must match.
+
+**macOS:**
+1. Open **Keychain Access**.
+2. Drag `ca/ca.crt` into the **System** keychain (or File → Import Items).
+3. Double-click the imported cert → Trust → set to **Always Trust**.
+4. Verify the fingerprint in the certificate details.
+
+**Linux (Debian/Ubuntu):**
+```bash
+sudo cp ca/ca.crt /usr/local/share/ca-certificates/ultron-ca.crt
+sudo update-ca-certificates
+```
+
+### 10.3 Name resolution
+
+`ultron.lan` must resolve to Pi4's management-plane IP — the wlan1/AC600 address on the `192.168.50.0/24` SENTINEL-SECURE network. On the Pi4, dnsmasq provides this:
+
+```ini
+# /etc/dnsmasq.d/ultron.conf
+# Replace 192.168.50.1 with Pi4's actual wlan1 IP if different.
+address=/ultron.lan/192.168.50.1
+```
+
+The HTTPS server must listen on this same address (set `ULTRON_HTTP_HOST` to the wlan1 IP, or leave `0.0.0.0` to bind all interfaces).
+
+Verify from a client on the AP:
+```bash
+dig @192.168.50.1 ultron.lan   # expect A 192.168.50.1
+```
+
+### 10.4 Production config
+
+```bash
+# systemd env (in sentinel-dashboard.service)
+ULTRON_RP_ID=ultron.lan
+ULTRON_ORIGINS=https://ultron.lan
+ULTRON_TLS_CERT=/opt/ultron/dashboard/certs/server.crt
+ULTRON_TLS_KEY=/opt/ultron/dashboard/certs/server.key
+ULTRON_HTTPS_PORT=443
+ULTRON_HTTP_PORT=8080
+ULTRON_REDIRECT_HTTP=1
+```
+
+The server listens on:
+- **443 (HTTPS)**: the dashboard (TLS with `server.crt`/`server.key`)
+- **8080 (HTTP)**: returns `301` redirect to `https://ultron.lan/`
+
+HSTS header: `Strict-Transport-Security: max-age=31536000` (no `includeSubDomains`).
+
+Cookies: `Secure; HttpOnly; SameSite=Strict`.
+
+CSP tightened in production: `connect-src 'self' wss://ultron.lan` (no bare `ws:` or `wss:` wildcard).
+
+### 10.5 RP ID and credential portability
+
+Passkeys are bound to the **RP ID** (`ultron.lan` in production, `localhost` in dev). Credentials enrolled on `localhost` do **not** work on `ultron.lan` — enrollment must be redone for the production origin.
+
+### 10.6 Real-device smoke test procedure
+
+> **Status: PENDING — operator device test.** Steps (a)–(d) below have not been executed on real hardware. The procedure is validated offline; actual device results will be recorded here after the operator runs the test.
+
+Prerequisites: Pi4 running with HTTPS, owner's laptop and phone on `SENTINEL-SECURE`, CA installed on both.
+
+**(a) Padlock check (laptop):**
+Open `https://ultron.lan` — browser shows padlock, no certificate warning.
+
+**(b) Laptop enrollment:**
+```bash
+# On Pi4 via SSH
+python -c "from server.auth_cli import cmd_enroll_token; ..." 
+# or: python -m server.auth_cli enroll-token
+```
+Open the printed URL on the laptop → Windows Hello / Touch ID prompt → register → dashboard loads.
+
+**(c) Phone enrollment:**
+Generate a second enrollment token. Open the URL on the phone → fingerprint prompt → dashboard loads.
+
+**(d) Lock + unlock (both devices):**
+Click SIGN OUT on each device → lock screen. Click UNLOCK WITH PASSKEY → biometric prompt → dashboard.
+
+**Fallback:** if `ultron.lan` fails WebAuthn on any real device, retry with `ultron.home.arpa` (RFC 8375). Do not proceed past CP6a until both a laptop and a phone can unlock.
+
+### 10.7 Deploy safety (`ca.key` never on Pi)
+
+`ca.key` lives on the admin SSD only. It is used once (or on reissue) to sign server certificates and then stays offline. The `Makefile` `deploy` target enforces this:
+
+```bash
+make deploy PI=ultron@192.168.50.1
+```
+
+The target:
+1. **Aborts** if `ca/` or `ca.key` exists in the repo tree — move them to the admin SSD first.
+2. **Excludes** `ca/` and `ca.key` via rsync `--exclude` (but **includes** `certs/server.key`).
+3. After rsync, sets `certs/server.key` to mode `0600` owned by the service user on the Pi.
+
+`.gitignore` excludes `ca/` and `*.key` — they cannot be committed accidentally.
+
+### 10.8 Smoke-test runner (`tools/smoke_pi.sh`)
+
+Run on the Pi4 over SSH to bring up just enough for the device test:
+
+```bash
+ssh ultron@192.168.50.1
+cd /opt/ultron/dashboard
+bash tools/smoke_pi.sh
+```
+
+The script:
+1. Checks that hostapd is running on wlan1 (the SENTINEL-SECURE AP). Fails clearly if not.
+2. Finds Pi4's management-plane IP on `192.168.50.0/24`.
+3. Verifies `certs/server.crt` and `certs/server.key` exist; aborts if `ca/ca.key` is present.
+4. Installs the dnsmasq snippet (`/etc/dnsmasq.d/ultron.conf`) with the detected IP.
+5. Prints `dig @127.0.0.1 ultron.lan` to verify DNS.
+6. Generates a one-time enrollment token and prints the URL.
+7. Starts the HTTPS server on the management IP, port 443, with `ULTRON_RP_ID=ultron.lan`.
+
+**Laptop-only fallback** (test steps (a) and (b) without the Pi):
+
+1. Add a hosts-file entry:
+   - Linux/macOS: `sudo sh -c 'echo "127.0.0.1 ultron.lan" >> /etc/hosts'`
+   - Windows: add `127.0.0.1 ultron.lan` to `C:\Windows\System32\drivers\etc\hosts`
+2. Run the server locally on 443:
+   ```bash
+   ULTRON_TLS_CERT=certs/server.crt ULTRON_TLS_KEY=certs/server.key \
+     ULTRON_RP_ID=ultron.lan ULTRON_ORIGINS=https://ultron.lan \
+     ULTRON_HTTPS_PORT=443 ULTRON_REDIRECT_HTTP=0 \
+     python -c "from server.main import main; main()"
+   ```
+3. Open `https://ultron.lan` in the browser (after installing the CA cert).
+
+---
+
+## 11. Recovery Runbook
+
+### 11.1 Lost phone (one passkey remains)
+
+No action needed. The owner still unlocks via the remaining device (laptop). To revoke the lost credential:
+1. Sign in on the remaining device.
+2. `/devices` → note the credential ID of the lost phone.
+3. DELETE `/auth/credentials/{id}` (or via a future admin UI).
+4. Re-enroll a replacement device with a new enrollment token.
+
+### 11.2 All passkeys lost
+
+The owner cannot unlock. Recovery requires Pi4 SSH access:
+
+```bash
+ssh ultron@192.168.50.1
+cd /opt/ultron/dashboard
+source venv/bin/activate
+python -m server.auth_cli reset-owner     # wipes all credentials + sessions
+python -m server.auth_cli enroll-token    # prints a one-time URL
+```
+
+Open the URL on the new device to re-enroll. The reset is audited in `auth.db`.
+
+### 11.3 Server certificate expiring
+
+Certificates generated by `tools/make_local_ca.sh` are valid for 825 days. To reissue without replacing the CA:
+
+```bash
+# On the admin SSD (where ca.key lives)
+bash tools/make_local_ca.sh --reissue
+# Deploy new cert to Pi4
+scp certs/server.crt certs/server.key ultron@192.168.50.1:/opt/ultron/dashboard/certs/
+ssh ultron@192.168.50.1 'chmod 600 /opt/ultron/dashboard/certs/server.key; sudo systemctl restart sentinel-dashboard'
+```
+
+No client-side CA reinstall required — the root CA has not changed.
+
+### 11.4 CA compromised
+
+If `ca.key` is exposed, all certificates signed by it must be treated as untrusted:
+
+1. Generate a new CA: `bash tools/make_local_ca.sh` (overwrites `ca/`).
+2. Install the new `ca/ca.crt` on all owner devices (§10.2).
+3. Deploy the new server cert to Pi4 (§11.3 steps).
+4. Restart the dashboard.
+5. Re-enroll all passkeys — RP ID has not changed, but a clean enrollment is prudent.
+
+### 11.5 Evidence pendrive swapped or failed
+
+The dashboard opens the evidence DB as **read-only** (`ULTRON_EVIDENCE_DB`). If the pendrive is missing or corrupt:
+
+- `/healthz` reports `"db_readable": false`.
+- The dashboard still works — auth, WS, alerts all function. The 24h history chart shows "no data" until the pendrive is restored.
+- Replace the pendrive, restore from the daily Pi3b report if needed, and restart the service.
+
+---
+
+## 12. Section E — Final Explanation
+
+### E.1 Files changed (CP6a–CP6c)
+
+| File | Change |
+|------|--------|
+| `dashboard/server/csp.py` | Added `https_port` parameter to both CSP functions for port-aware `wss://` source |
+| `dashboard/server/main.py` | Wired `https_port` through to CSP; TLS server setup with `ssl.SSLContext`; HTTP→HTTPS 301 redirect |
+| `dashboard/server/auth.py` | WebAuthn endpoints (setup, login, register, logout); session management; rate limiting |
+| `dashboard/server/auth_db.py` | SQLite credential/session/token/audit storage; SHA-256 hashing; WAL mode |
+| `dashboard/server/auth_cli.py` | CLI for enrollment tokens and owner reset |
+| `dashboard/server/ws_session.py` | WS-to-session tracking; `close_session_sockets` for logout |
+| `dashboard/server/config.py` | TLS, auth, and RP configuration from environment variables |
+| `Makefile` | Wheelhouse build, deploy (rsync with CA exclusion), deploy-setup |
+| `nftables/ultron-pi4.nft` | Deny-first firewall: management 443/8080/53/67/22; production 1883/22 |
+| `tools/make_local_ca.sh` | Offline CA + server cert generator (EC P-256, SAN `DNS:ultron.lan`) |
+| `tools/smoke_pi.sh` | Pi4 smoke-test runner (hostapd, dnsmasq, certs, enrollment, HTTPS start) |
+| `tools/dnsmasq-ultron.conf` | dnsmasq snippet for `ultron.lan` → management-plane IP |
+| `systemd/sentinel-dashboard.service` | Hardened unit: `NoNewPrivileges`, `ProtectSystem=strict`, `CAP_NET_BIND_SERVICE` |
+| `architecture.md` | §2 firewall, §3.1 service table, §7 security controls, §9 systemd, §10 auth.db schema |
+| `dashboard.md` | Stack, §5 transport, §7 states, §8 checklist, §9 layout/CSP |
+| `build.md` | B10 checklist, B11 deployment steps |
+| `README.md` | Pitch, quick start, wiring, §6 dashboard, §7 demo beat 0, Q&A |
+| `promt.md` | §5 network map, §4 quality bar, §8 rule 10 |
+| `blackhat.md` | §7.2 firewall, §13 dashboard table, §18 security hardening |
+| `use.md` | §1 deploy, §8 fixed issues, §10 HTTPS, §11 recovery, §12 this section |
+
+### E.2 Library versions
+
+| Library | Version | Purpose |
+|---------|---------|---------|
+| `aiohttp` | 3.10.10 | HTTPS server, static serving, WebSocket |
+| `aiomqtt` | 2.3.0 | MQTT bridge (subscribe/publish) |
+| `aiosqlite` | 0.20.0 | Async evidence DB reads |
+| `webauthn` (`py_webauthn`) | 3.0.1 | WebAuthn/FIDO2 registration and authentication |
+
+All installed via air-gapped wheelhouse (`pip download --platform manylinux2014_aarch64 --python-version 3.11 --only-binary=:all:`).
+
+### E.3 Credential storage
+
+- **Credentials:** public key, sign count, transports, device type, AAGUID, backed-up flag stored in `auth.db` table `credentials`. Private keys never leave the authenticator device.
+- **Sessions:** only the SHA-256 hash of the session ID is stored in `auth.db` table `sessions`. The raw session ID exists only in the `Secure; HttpOnly; SameSite=Strict` cookie.
+- **Enrollment tokens:** only the SHA-256 hash is stored in `auth.db` table `enrollment_tokens`. The raw token is printed once to the terminal and never logged.
+- **CA key:** lives on the admin SSD only. Never deployed to the Pi, never committed to git. `Makefile` aborts if `ca/` or `ca.key` exists in the repo tree.
+
+### E.4 Enrollment flow
+
+1. Operator generates a one-time token via CLI (`python -m server.auth_cli enroll-token`).
+2. Token hash stored in `enrollment_tokens`; raw token printed once.
+3. Owner opens the setup URL → browser sends token to `POST /auth/setup`.
+4. Server validates token hash, creates a WebAuthn registration challenge.
+5. Browser prompts biometric (Windows Hello / fingerprint) → sends attestation to `POST /auth/setup/complete`.
+6. Server verifies with `py_webauthn`, stores credential, creates session, consumes the token.
+7. Dashboard loads. Subsequent devices use `POST /auth/register/begin` + `/complete` (requires existing session).
+
+### E.5 Unlock flow
+
+1. Owner opens `https://ultron.lan` → browser calls `GET /auth/status`.
+2. If `has_owner: true, authenticated: false` → login screen shown.
+3. Browser calls `POST /auth/login/begin` → server returns challenge + allowed credential IDs.
+4. Browser prompts biometric → sends assertion to `POST /auth/login/complete`.
+5. Server verifies with `py_webauthn`, creates session (SHA-256 hash stored), sets `Secure; HttpOnly; SameSite=Strict` cookie.
+6. Dashboard loads; `/ws` upgrade requires valid session cookie + matching `Origin`.
+
+### E.6 Localhost testing
+
+For development without TLS or a Pi:
+
+```bash
+cd dashboard
+pip install -r server/requirements.txt
+python -m server.main    # HTTP on :8080, RP ID = localhost
+```
+
+Open `http://localhost:8080`. WebAuthn works on `localhost` (browsers treat it as a secure context). Enrollment tokens work the same way.
+
+### E.7 Localhost → production differences
+
+| Aspect | Localhost (dev) | Production (`ultron.lan`) |
+|--------|----------------|---------------------------|
+| Transport | HTTP :8080 | HTTPS :443 + HTTP :8080 → 301 |
+| RP ID | `localhost` | `ultron.lan` |
+| Origins | `http://localhost:8080` | `https://ultron.lan` |
+| Cookies | `HttpOnly; SameSite=Strict` (no `Secure`) | `Secure; HttpOnly; SameSite=Strict` |
+| CSP `connect-src` | `'self' ws: wss:` | `'self' wss://ultron.lan` |
+| HSTS | not sent | `max-age=31536000` |
+| Credentials | bound to `localhost` | bound to `ultron.lan` (must re-enroll) |
+| CA cert | not needed | install `ca/ca.crt` on owner devices |
+| Debug page | `ULTRON_DEBUG=1` | mgmt subnet + basic auth |
