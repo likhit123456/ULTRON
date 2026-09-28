@@ -75,14 +75,8 @@ function handleServerCommand(name: string, args: string, raw: string): void {
       break;
     }
     case "devices": {
-      fetch("/auth/credentials")
-        .then((r) => r.json())
-        .then((creds: Array<{ id: string; revoked: boolean; sign_count: number }>) => {
-          const lines = creds.map((c) =>
-            `${c.id.slice(0, 20)}… count=${c.sign_count} ${c.revoked ? "REVOKED" : "active"}`);
-          store.addCommand(entry(raw, lines.join("\n") || "No credentials", true));
-        })
-        .catch((e) => store.addCommand(entry(raw, `Error: ${e.message}`, false)));
+      store.setShowDevices(true);
+      store.addCommand(entry(raw, "Opened devices panel", true));
       break;
     }
     default:

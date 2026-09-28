@@ -26,9 +26,14 @@ def _ts(epoch: float | None) -> str:
 
 
 def cmd_enroll_token(db: AuthDB, args: argparse.Namespace) -> None:
+    cfg = load()
     token = db.create_enrollment_token(ttl=args.ttl)
+    origin = cfg.origins[0] if cfg.origins else f"http://localhost:{cfg.http_port}"
+    url = f"{origin}/?t={token}"
     print(f"\n  Enrollment token (single-use, expires in {args.ttl}s):\n")
     print(f"    {token}\n")
+    print(f"  Open this link in your browser to register:\n")
+    print(f"    {url}\n")
     print("  This token will NOT be shown again.\n")
 
 

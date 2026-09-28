@@ -76,6 +76,7 @@ export interface State {
   muteUntil: number;
   focusNode: string | null;
   eventFilter: string;
+  showDevices: boolean;
 }
 
 const MAX_ALERTS = 200;
@@ -91,7 +92,7 @@ function initial(): State {
     nodes: {}, layers: { idsCount: 0, idsLast: 0, lanToday: 0, wifiRogue: false, wifiLast: 0, tripLast: 0, tripSeq: 0 },
     pipeline: { detect: 0, govern: 0, alert: 0 },
     latencyLast: 0, latencyP95: 0, clockReady: false, clockUncertaintyMs: Infinity, lastToast: null,
-    events: [], devices: {}, commandHistory: [], muteUntil: 0, focusNode: null, eventFilter: "all",
+    events: [], devices: {}, commandHistory: [], muteUntil: 0, focusNode: null, eventFilter: "all", showDevices: false,
   };
 }
 
@@ -164,6 +165,12 @@ export class Store {
 
   setMuteUntil(ts: number): void {
     this.state = { ...this.state, muteUntil: ts };
+    this.emit();
+  }
+
+  setShowDevices(v: boolean): void {
+    if (this.state.showDevices === v) return;
+    this.state = { ...this.state, showDevices: v };
     this.emit();
   }
 

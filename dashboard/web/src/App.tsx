@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect } from "react";
 import { useStore } from "./store/store";
 import { AuthGate } from "./components/AuthGate";
+import { DevicesPanel } from "./components/DevicesPanel";
 import OperatorView from "./views/OperatorView";
 
 const BoothView = lazy(() => import("./views/BoothView"));
@@ -29,6 +30,7 @@ export default function App() {
   return (
     <AuthGate>
       <Dashboard />
+      <DevicesPanel />
     </AuthGate>
   );
 }

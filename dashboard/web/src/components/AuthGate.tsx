@@ -7,9 +7,11 @@ import {
 } from "../lib/auth";
 
 function SetupScreen() {
-  const [token, setToken] = useState("");
+  const urlToken = new URLSearchParams(location.search).get("t") ?? "";
+  const [token] = useState(urlToken);
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
+  const hasToken = Boolean(urlToken);
 
   async function handleSetup() {
     if (!token.trim()) return;
@@ -34,25 +36,33 @@ function SetupScreen() {
     }
   }
 
+  if (!hasToken) {
+    return (
+      <div className="auth-screen">
+        <div className="auth-card">
+          <div className="auth-logo">ULT<b>RON</b></div>
+          <div className="auth-title">Owner Setup</div>
+          <p className="auth-hint">
+            No owner registered. Run the CLI command to create an enrollment token:
+          </p>
+          <pre className="auth-cli-hint">python -m server.auth_cli enroll-token</pre>
+          <p className="auth-hint">
+            Then open the link printed by the command.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="auth-screen">
       <div className="auth-card">
         <div className="auth-logo">ULT<b>RON</b></div>
-        <div className="auth-title">Owner Setup</div>
+        <div className="auth-title">Register Passkey</div>
         <p className="auth-hint">
-          Paste the enrollment token from the server terminal.
+          Register a passkey to become the dashboard owner.
         </p>
-        <input
-          className="auth-input"
-          type="text"
-          placeholder="Enrollment token"
-          value={token}
-          onChange={(e) => setToken(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && handleSetup()}
-          disabled={busy}
-          autoFocus
-        />
-        <button className="auth-btn" onClick={handleSetup} disabled={busy || !token.trim()}>
+        <button className="auth-btn" onClick={handleSetup} disabled={busy} autoFocus>
           Register Passkey
         </button>
         {status && <div className="auth-status">{status}</div>}
@@ -89,7 +99,7 @@ function LoginScreen() {
         <div className="auth-title">Authenticate</div>
         <p className="auth-hint">Use your registered passkey to unlock the dashboard.</p>
         <button className="auth-btn" onClick={handleLogin} disabled={busy} autoFocus>
-          Sign In
+          Unlock with Passkey
         </button>
         {status && <div className="auth-status">{status}</div>}
       </div>
